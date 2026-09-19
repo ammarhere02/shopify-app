@@ -1,0 +1,181 @@
+// Prisma schema for Merchant Product Enrichment Hub (MySQL 8).
+// Model names are PascalCase for code; @@map gives snake_case table names in MySQL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Managed by @shopify/shopify-app-session-storage-prisma. Field names must stay as-is.
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?   @db.Text
+  expires             DateTime?
+  accessToken         String    @db.Text
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?   @db.Text
+  refreshTokenExpires DateTime?
+
+  @@index([shop])
+  @@map("shop_sessions")
+}
+
+// One row per store that installed the app. The tenant root for all app data.
+model Shop {
+  id             Int       @id @default(autoincrement())
+  shopDomain     String    @unique @db.VarChar(255) // normalized: lowercase "x.myshopify.com"
+  shopifyShopGid String?   @db.VarChar(100)
+  name           String?   @db.VarChar(255)
+  scopes         String?   @db.Text
+  installedAt    DateTime  @default(now())
+  uninstalledAt  DateTime? // null = active install
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  products       Product[]
+  syncRuns       SyncRun[]
+  webhookReceipts WebhookReceipt[]
+  apiKeys        DeveloperApiKey[]
+
+  @@map("shops")
+}
+
+// Local projection of a Shopify product. Shopify owns these fields.
+model Product {
+  id                Int       @id @default(autoincrement())
+  shopId            Int
+  shopifyProductGid String    @db.VarChar(100) // "gid://shopify/Product/123" kept as string
+  title             String    @db.VarChar(255)
+  handle            String    @db.VarChar(255)
+  status            String    @db.VarChar(20) // ACTIVE | DRAFT | ARCHIVED
+  vendor            String?   @db.VarChar(255)
+  productType       String?   @db.VarChar(255)
+  updatedAtShopify  DateTime
+  syncedAt          DateTime
+  deletedAt         DateTime? // soft delete: product gone from Shopify, enrichment kept
+
+  shop       Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  variants   Variant[]
+  enrichment ProductEnrichment?
+
+  @@unique([shopId, shopifyProductGid]) // makes re-sync idempotent
+  @@index([shopId, title])
+  @@index([shopId, status])
+  @@map("products")
+}
+
+model Variant {
+  id                Int      @id @default(autoincrement())
+  productId         Int
+  shopifyVariantGid String   @unique @db.VarChar(100)
+  title             String   @db.VarChar(255)
+  sku               String?  @db.VarChar(255)
+  price             Decimal  @db.Decimal(12, 2)
+  syncedAt          DateTime
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@map("variants")
+}
+
+// App-owned data. The sync never writes here, so it survives catalog refreshes.
+model ProductEnrichment {
+  id           Int      @id @default(autoincrement())
+  productId    Int      @unique // one enrichment per product
+  badgeText    String   @db.VarChar(40)
+  badgeColor   String   @db.VarChar(7) // "#RRGGBB"
+  internalNote String?  @db.Text // PRIVATE: never returned to storefront
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_enrichments")
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+}
+
+model WebhookReceipt {
+  id          Int           @id @default(autoincrement())
+  shopId      Int?
+  shopDomain  String        @db.VarChar(255)
+  topic       String        @db.VarChar(100)
+  webhookId   String        @unique @db.VarChar(100) // X-Shopify-Webhook-Id => dedupe
+  status      WebhookStatus @default(RECEIVED)
+  error       String?       @db.Text
+  receivedAt  DateTime      @default(now())
+  processedAt DateTime?
+
+  shop Shop? @relation(fields: [shopId], references: [id], onDelete: SetNull)
+
+  @@index([shopId, topic])
+  @@map("webhook_receipts")
+}
+
+enum SyncType {
+  FULL
+  RECONCILE
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model SyncRun {
+  id          Int        @id @default(autoincrement())
+  shopId      Int
+  type        SyncType   @default(FULL)
+  status      SyncStatus @default(RUNNING)
+  cursor      String?    @db.Text // last successfully saved page cursor (checkpoint)
+  fetched     Int        @default(0)
+  inserted    Int        @default(0)
+  updated     Int        @default(0)
+  markedStale Int        @default(0)
+  failed      Int        @default(0)
+  error       String?    @db.Text
+  startedAt   DateTime   @default(now())
+  completedAt DateTime?
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, status])
+  @@map("sync_runs")
+}
+
+model DeveloperApiKey {
+  id         Int       @id @default(autoincrement())
+  shopId     Int
+  keyHash    String    @unique @db.Char(64) // sha256 hex; plaintext never stored
+  keyPrefix  String    @db.VarChar(12) // first chars, lets merchant recognise a key
+  label      String    @db.VarChar(100)
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId])
+  @@map("developer_api_keys")
+}

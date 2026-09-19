@@ -1,0 +1,22 @@
+# Local development database only. Credentials are dev placeholders (never production).
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: enrichment-hub-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: enrichment_hub
+      MYSQL_USER: app
+      MYSQL_PASSWORD: app
+    ports:
+      - "3307:3306" # 3307 on the host to avoid clashing with any other local MySQL
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      retries: 20
+
+volumes:
+  mysql-data:
