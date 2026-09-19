@@ -1,13 +1,20 @@
-# Learning Notes — Merchant Product Enrichment Hub
+# Design decisions — Merchant Product Enrichment Hub
 
-One section per phase: **what** we built, **why**, and **alternatives**.
+One section per part of the app: **what** was built, **why**, and the **alternatives** considered. How each folder works today is in that folder's `README.md`; what has been verified is in [VERIFICATION.md](VERIFICATION.md).
+
+1. [Database, install lifecycle and tenant context](#1-database-install-lifecycle-and-tenant-context)
+2. [Product sync](#2-product-sync-shopify-admin-graphql--mysql)
+3. [Product search and badge editor](#3-product-search-and-badge-editor)
+4. [Product webhooks](#4-product-webhooks-and-idempotent-receipts)
+5. [Developer API](#5-developer-api-apiv1-and-api-keys)
+6. [Storefront badge](#6-app-proxy-and-the-product-badge-theme-block)
 
 ---
 
-## Phase 1 — MySQL, schema, tenant (shop) context
+## 1. Database, install lifecycle and tenant context
 
 ### 1. `docker-compose.yml` + `docker/mysql-init.sql`
-- Runs MySQL 8.0 in a container on host port **3307** (container port 3306). 3307 avoids clashing with your other `infra-mysql-1` container or a Homebrew MySQL.
+- Runs MySQL 8.0 in a container on host port **3307** (container port 3306). 3307 avoids clashing with any other MySQL already using 3306 on the machine.
 - `volumes: mysql-data` → data survives container restarts.
 - `healthcheck` → lets us wait until MySQL actually accepts connections.
 - `mysql-init.sql` runs only the *first* time the volume is created: it creates a test DB and grants the `app` user permission to create databases. Prisma's `migrate dev` needs that to build a temporary **shadow database**, which it uses to detect schema drift.
@@ -17,10 +24,10 @@ One section per phase: **what** we built, **why**, and **alternatives**.
 - `DATABASE_URL` tells Prisma where MySQL is. `.env` is git-ignored (secrets never get committed); `.env.example` has placeholders and *is* committed. We added `!.env.example` to `.gitignore` because the template ignored `.env.*`.
 - Shopify keys are not in `.env`: `shopify app dev` injects `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` and `SCOPES` at runtime from your Partner app.
 
-### 3. `db/schema.prisma` (was `prisma/schema.prisma` until the folder was renamed to match the assignment layout)
-**Prisma** is an ORM: you describe tables once, and it generates (a) SQL migrations and (b) a typed client (`db.product.findMany(...)`).
+### 3. `db/schema.prisma`
+**Prisma** is an ORM: the tables are described once, and it generates (a) SQL migrations and (b) a typed client (`db.product.findMany(...)`).
 - `provider = "mysql"` was `"sqlite"`. The assignment rejects SQLite.
-- We deleted the old SQLite migration: migrations are database-specific, so we started fresh with `db/migrations/<timestamp>_init_mysql_schema/migration.sql`. **Open that file.** It's the real SQL (CREATE TABLE, UNIQUE, INDEX, FOREIGN KEY).
+- We deleted the old SQLite migration: migrations are database-specific, so we started fresh with `db/migrations/<timestamp>_init_mysql_schema/migration.sql`. That file is the real SQL (CREATE TABLE, UNIQUE, INDEX, FOREIGN KEY).
 - `@@map("products")` → code uses `Product`, and the MySQL table is named `products` (snake_case, as the assignment names them).
 
 Model by model:
@@ -68,18 +75,16 @@ Open app in admin → authenticate.admin → no session? → OAuth (Shopify veri
 Uninstall → Shopify sends app/uninstalled webhook → HMAC verified → recordUninstall
 ```
 
-### 8. What we learned while testing Phase 1
+### 8. Platform behaviour confirmed on the development store
 - **Managed installation + token exchange.** On a dev store, `shopify app dev` installs the app and auto-grants the toml scopes at startup, so there's no consent screen and no OAuth redirect. When the app loads, the admin sends a signed **session token (JWT)**, and the library swaps it server-to-server for an **access token**. The old redirect OAuth (`/auth/callback?code=`) is only a fallback.
 - **The Preview URL gives a 404 after uninstall** because the app no longer exists on that store. Pressing `p` only opens the URL; restarting `shopify app dev` is what reinstalls.
 - **There is no "installed" webhook.** Install and reinstall are detected through `afterAuth` (on a new token). Uninstall is detected through the `app/uninstalled` webhook.
-- **Scope changes on an existing install** fire `app/scopes_update`, not `afterAuth`. We first forgot to update `shops.scopes` there, which caused a stale value (bug found and fixed). Lesson: when you copy data into your own table, update it at *every* place where the source changes.
+- **Scope changes on an existing install** fire `app/scopes_update`, not `afterAuth`. `shops.scopes` is a copy of the session's scope, so that handler updates it too: a copied value has to be refreshed at *every* place where its source changes.
 - **Pinned version must match everywhere:** `ApiVersion.July26` in `shopify.server.ts` and `webhooks.api_version = "2026-07"` in the toml.
 
 ---
 
-## Phase 2 — Product sync (Shopify Admin GraphQL → MySQL)
-
-This is Phase 2 of our implementation notes; it corresponds to Phase 4 in the assignment PDF.
+## 2. Product sync (Shopify Admin GraphQL → MySQL)
 
 ### What the merchant gets
 
@@ -91,8 +96,8 @@ Example: Shopify product `123` was called “Red T-shirt” when we first copied
 
 | Operation | Starts where? | What changes? |
 |---|---|---|
-| Manual sync (this phase) | Merchant clicks our admin app button | Our MySQL copy is refreshed from Shopify queries |
-| Webhook (later phase) | Shopify notifies our server after a product event | Our handler will update the MySQL copy |
+| Manual sync (this section) | Merchant clicks our admin app button | Our MySQL copy is refreshed from Shopify queries |
+| Webhook (section 4) | Shopify notifies our server after a product event | Our handler updates the MySQL copy |
 | Shopify mutation (optional stretch work) | Our server asks Shopify to change data | Shopify's own data changes |
 
 Prisma connects **our server to MySQL**. It does not watch Shopify or automatically copy anything. Our sync service supplies the instructions and data to Prisma. No theme extension, webhook, or Shopify mutation is involved in the manual sync button.
@@ -143,20 +148,20 @@ Framework-thrown `Response` objects (for example, reauthentication redirects) mu
 
 GraphQL logs include the local shop ID, sync run ID, operation, attempt, duration and cost. Tokens and headers are not passed to the logger. Its redaction is only for sensitive top-level field names; it is not a general scrubber for arbitrary nested objects or message text.
 
-### Checks added in this phase
+### Automated checks for the sync
 
 - `npm test`: mapping validation, price preservation, cursor failure, authentication redirects, error classification, bounded retries, throttle refill, deadlines and abort signals.
 - `npm run test:integration`: real MySQL transactions and repositories with mocked Shopify responses; 60-product pagination, repeated imports, title updates, enrichment preservation, shop isolation, 130-variant pagination, obsolete variant removal, rollback counts, safe reruns, deletion/revival, simultaneous starts and abandoned-run protection.
 - `npm run typecheck`, `npm run lint`, `npm run build`.
 - Shopify AI Toolkit schema validation accepted the three queries against `2026-07`, requiring only `read_products`.
 
-Integration tests require a separate local database ending in `_test`, apply migrations, and delete only fixture shops created by the test process. They never reset the development database. See `docs/PHASES.md` for commands and live-store evidence.
+Integration tests require a separate local database ending in `_test`, apply migrations, and delete only fixture shops created by the test process. They never reset the development database. See `docs/VERIFICATION.md` for commands and live-store evidence.
 
-### What is still outside this phase
+### Limits of the sync
 
-Product search, badge editing, developer API endpoints/keys, product webhooks, and the storefront theme block. Reconcile currently invokes the same full-sync implementation with a different run type; it is manual and does not mean webhooks are already implemented.
+Reconcile invokes the same full-sync implementation with a different run type. It is started by hand (button or `POST /api/v1/syncs`); nothing schedules it.
 
-There is no cross-request snapshot of a catalog while the merchant edits it. We detect timestamp changes when fetching extra variant pages and fail safely, but concurrent changes elsewhere may only appear on the next reconciliation. This phase is designed for a small development store.
+There is no cross-request snapshot of a catalog while the merchant edits it. We detect timestamp changes when fetching extra variant pages and fail safely, but concurrent changes elsewhere may only appear on the next reconciliation. The sync is sized for a small development store.
 
 ### Official references used
 
@@ -165,7 +170,7 @@ There is no cross-request snapshot of a catalog while the merchant edits it. We 
 
 ---
 
-## Phase 3 — Product search and badge editor
+## 3. Product search and badge editor
 
 ### What the merchant gets
 A **Products** page in the app: search the local catalog by title, filter by status or "has badge", open a product, and save or remove its badge and private note.
@@ -175,7 +180,7 @@ A **Products** page in the app: search the local catalog by title, filter by sta
 |---|---|
 | `app/routes/app.products._index.tsx` | List page. The loader reads filters from the URL and returns one page of products |
 | `app/routes/app.products.$id.tsx` | Editor page. The loader shows the product; the action saves or removes the enrichment |
-| `app/services/enrichment-validation.ts` | The badge rules in one place. The Phase 5 API reuses it, so UI and API cannot disagree |
+| `app/services/enrichment-validation.ts` | The badge rules in one place. The developer API reuses it, so UI and API cannot disagree |
 | `app/repositories/enrichment.server.ts` | All database access, always filtered by `shopId` |
 
 ### Decisions and why
@@ -190,7 +195,7 @@ A **Products** page in the app: search the local catalog by title, filter by sta
 
 ---
 
-## Phase 4 — Product webhooks and idempotent receipts
+## 4. Product webhooks and idempotent receipts
 
 ### What the merchant gets
 Editing or deleting a product in Shopify updates our local copy within seconds, without pressing Sync. Badges and notes are never touched.
@@ -226,7 +231,7 @@ POST /webhooks/... → route action
 
 ---
 
-## Phase 5 — Developer API `/api/v1` and API keys
+## 5. Developer API `/api/v1` and API keys
 
 ### What it is for
 A script or another system can read products and manage badges without a browser: it sends `Authorization: Bearer <key>`. The key decides which shop it is talking about.
@@ -250,7 +255,7 @@ request → request id → method check → failed-login gate (per IP)
 7. **202 for syncs.** The route creates the run, starts `runProductSync` without awaiting it and returns the run id with a `Location` header; the client polls. The Shopify session is fetched BEFORE the run is created, otherwise a shop without a token would be stuck with a RUNNING row for 15 minutes.
 8. **`unauthenticated.admin(shop)`** is the framework's way to call Shopify with the stored offline token when there is no browser session, as here.
 9. **Rate limits keyed after auth.** The per-key counter uses the key's database id. Keying by the raw token would let random tokens fill memory. Failed logins are counted per IP separately.
-10. **`internalNote` is returned here** because the key holder is the merchant and can also write it. The storefront endpoint in Phase 6 must use its own serializer without it.
+10. **`internalNote` is returned here** because the key holder is the merchant and can also write it. The storefront endpoint (section 6) must use its own serializer without it.
 11. **Keys are created with a CLI script**, which prints the plaintext once. A merchant-facing page for keys is a listed stretch goal.
 
 ### Known limits
@@ -260,7 +265,7 @@ request → request id → method check → failed-login gate (per IP)
 
 ---
 
-## Phase 6 — App proxy and the Product Badge theme block
+## 6. App proxy and the Product Badge theme block
 
 ### What the merchant and shopper get
 The merchant adds a **Product Badge** block to the product template in the theme editor and styles it. Shoppers see the product's active badge. Products without one show nothing.

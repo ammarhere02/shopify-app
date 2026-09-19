@@ -11,7 +11,7 @@ Shopify admin / Shopify webhook / API client / storefront (app proxy)
                            \-> shopify/ -> Shopify Admin GraphQL
 ```
 
-Merchant Product Enrichment Hub. Status of every phase: `docs/PHASES.md`. Reasons for each design: `docs/LEARNING.md`. Read those before assuming a feature exists.
+Merchant Product Enrichment Hub. What is built and verified: `docs/VERIFICATION.md`. Reasons for each design: `docs/DESIGN.md`. Read those before assuming a feature exists.
 
 ## Layers (keep this direction: routes → services → repositories → Prisma)
 | Path | Role |

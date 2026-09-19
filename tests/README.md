@@ -1,7 +1,7 @@
 # tests/ — Vitest
 
 ## What this folder is
-All automated tests. Two kinds: unit tests that need nothing, and integration tests that run the real route handlers and repositories against a real MySQL test database. Shopify itself is always mocked; checks against a live development store are the manual lists in `docs/PHASES.md`.
+All automated tests. Two kinds: unit tests that need nothing, and integration tests that run the real route handlers and repositories against a real MySQL test database. Shopify itself is always mocked; checks against a live development store are the manual lists in `docs/VERIFICATION.md`.
 
 How the assignment's required tests map to files: badge validation → `enrichment-validation.test.ts`; GraphQL mapping → `product-mapping.test.ts`; a sync decision path → `sync.test.ts`; repository upserts and repeated sync/webhook → `sync.integration.test.ts`, `webhook.integration.test.ts`; request tests (401, tenant scoping, valid write, bad payload, missing product) → `api.integration.test.ts`; raw-body webhook signature tests → `webhook.integration.test.ts`; storefront badge states → `storefront.integration.test.ts` plus the manual theme checklist.
 
@@ -30,9 +30,9 @@ How the assignment's required tests map to files: badge validation → `enrichme
 
 ## Rules
 - Integration tests create their own shops (random domain) and delete only those in `afterAll`. Never truncate or reset a database.
-- Shopify is always mocked here. Live checks are the manual checklist in `docs/PHASES.md`.
+- Shopify is always mocked here. Live checks are the manual checklist in `docs/VERIFICATION.md`.
 - `webhook.integration.test.ts` and `storefront.integration.test.ts` set `SHOPIFY_API_SECRET` etc. inside `vi.hoisted`, because `shopify.server.ts` reads env at import time and ES imports run before normal statements.
 - The webhook test deletes only the receipts whose ids it generated.
 - API tests call `resetRateLimitsForTests()` in `beforeEach`, because the limiters are module-level state.
-- Liquid and the block's JS cannot run in Vitest. `shopify theme check --path extensions/product-badge` lints them; rendering is on the manual checklist in `docs/PHASES.md`.
+- Liquid and the block's JS cannot run in Vitest. `shopify theme check --path extensions/product-badge` lints them; rendering is on the manual checklist in `docs/VERIFICATION.md`.
 - Not covered yet: `products/update` through the route with a real session is not automated (needs a live token); it is on the manual checklist.

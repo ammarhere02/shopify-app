@@ -6,7 +6,7 @@ Use the [Shopify AI Toolkit](https://shopify.dev/docs/apps/build/ai-toolkit) for
 
 ## Codebase map
 
-Project: Merchant Product Enrichment Hub (assignment PDF in repo root). Phase status: `docs/PHASES.md`. Design reasons: `docs/LEARNING.md`.
+Project: Merchant Product Enrichment Hub (assignment PDF in repo root). What is built and verified: `docs/VERIFICATION.md`. Design reasons: `docs/DESIGN.md`.
 
 Each main folder has its own `README.md` describing what is really there and how it works. It is the single source of context for people and agents: the folder's `CLAUDE.md` loads it (`@README.md`) and its `AGENTS.md` only points to it. Read it before changing that folder, and update it in the same change when the folder's behaviour changes:
 `app/`, `app/routes/`, `app/services/`, `app/repositories/`, `app/shopify/`, `db/` (Prisma schema and migrations; `package.json` → `prisma.schema`), `tests/`, `extensions/`, `scripts/`, `docker/`, `docs/`.

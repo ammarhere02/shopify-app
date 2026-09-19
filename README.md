@@ -4,7 +4,7 @@ An embedded Shopify app. A merchant copies their product catalog from Shopify in
 
 Built with React Router 7, TypeScript, Prisma, MySQL 8 and a Theme App Extension. Admin API version `2026-07`, scope `read_products` only: the app never writes to Shopify.
 
-**Status:** Phases 0–6 of 8 are built and covered by automated tests. Remaining: some manual live-store checks, extra tests (Phase 7) and the submission documents (Phase 8). Details and checklists: [docs/PHASES.md](docs/PHASES.md). See [Known gaps](#known-gaps).
+**Status:** every Must requirement of the assignment is implemented and covered by automated tests. Some live development-store checks and the submission documents (architecture note, ER diagram, OpenAPI file) are still open: see [docs/VERIFICATION.md](docs/VERIFICATION.md) and [Known gaps](#known-gaps).
 
 ## Repository layout
 
@@ -22,7 +22,7 @@ Each folder has a `README.md` that explains what it holds and how it works. Star
 | [tests/](tests/README.md) | Unit and real-MySQL integration tests, and what each file covers |
 | [scripts/](scripts/README.md) | Integration test runner and the API key command |
 | [docker/](docker/README.md) | MySQL init script used by `docker-compose.yml` |
-| [docs/](docs/README.md) | Phase plan and status, design decisions and their reasons |
+| [docs/](docs/README.md) | Design decisions and their reasons, verification status and checklists |
 
 This follows the assignment's recommended layout (`/app`, `/extensions/product-badge/blocks` and `/assets`, `/db/migrations`, `/tests`, `/docs`, `.env.example`, `README.md`).
 
@@ -112,14 +112,14 @@ npm run build
 npx shopify theme check --path extensions/product-badge
 ```
 
-The integration runner refuses any database that is not on localhost or whose name does not end in `_test`, applies the migrations, and removes only the rows it created. Shopify is mocked in all automated tests; signatures are not: webhook and app-proxy tests sign real requests so the real verification code runs. Live development-store checks are the manual lists in [docs/PHASES.md](docs/PHASES.md).
+The integration runner refuses any database that is not on localhost or whose name does not end in `_test`, applies the migrations, and removes only the rows it created. Shopify is mocked in all automated tests; signatures are not: webhook and app-proxy tests sign real requests so the real verification code runs. Live development-store checks are the manual lists in [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 ## Known gaps
 
 - **Sync runs inside the request**, with a 60-second work budget. Fine for a development catalog. A larger catalog needs a background worker or a Shopify bulk operation. A failed run keeps the pages already saved, and a re-run is safe.
 - **Webhooks are processed inside the request**, with no queue or replay. A delivery that fails all of Shopify's retries stays `FAILED` in `webhook_receipts`, and Reconcile repairs the data.
 - **Rate limits live in memory**, so they reset on restart and are per process.
-- **No admin page for API keys** (use `npm run api-key`), **no OpenAPI file**, no architecture note or ER diagram yet (Phase 8).
+- **No admin page for API keys** (use `npm run api-key`), **no OpenAPI file**, no architecture note or ER diagram yet.
 - `variants` has no inventory field, because the app only holds `read_products`.
 - No `products/create` subscription: a new product arrives with its first `products/update` or the next sync.
 - The `Dockerfile` is the unmodified template file and has not been validated as a deployment path.
@@ -127,4 +127,4 @@ The integration runner refuses any database that is not on localhost or whose na
 
 To upgrade the pinned Admin API version change `app/shopify.server.ts`, `.graphqlrc.ts` and `webhooks.api_version` in `shopify.app.toml` together, then re-validate the queries in `app/shopify/queries.ts`.
 
-Why each part is built this way: [docs/LEARNING.md](docs/LEARNING.md).
+Why each part is built this way: [docs/DESIGN.md](docs/DESIGN.md).

@@ -42,7 +42,7 @@ let nextId = Math.floor(Date.now() / 10) + 500_000;
 const badge = { badgeText: "Staff Pick", badgeColor: "#1A7F37", internalNote: "secret note", active: true };
 
 const makeShop = async () => {
-  const shop = await db.shop.create({ data: { shopDomain: `phase4-${randomUUID()}.myshopify.com` } });
+  const shop = await db.shop.create({ data: { shopDomain: `webhook-${randomUUID()}.myshopify.com` } });
   shops.push(shop.id);
   return shop;
 };

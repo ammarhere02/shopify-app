@@ -157,7 +157,7 @@ export async function startSyncRun(
 
 /**
  * Full catalog sync: Shopify Admin GraphQL -> MySQL.
- * Runs synchronously (acceptable for small dev catalogs; see LEARNING.md for the queue design).
+ * Runs synchronously (acceptable for small dev catalogs; see docs/DESIGN.md for the queue design).
  *
  * Failure strategy: each page is committed in its own transaction and the cursor is
  * checkpointed. If page N fails, pages 1..N-1 stay saved, the run is FAILED, and a re-run

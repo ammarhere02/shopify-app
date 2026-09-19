@@ -35,7 +35,7 @@ const NOTE = "PRIVATE margin 40 percent";
 const badge = { badgeText: "Staff Pick", badgeColor: "#FFFF00", internalNote: NOTE, active: true };
 
 const makeShop = async () => {
-  const shop = await db.shop.create({ data: { shopDomain: `phase6-${randomUUID()}.myshopify.com` } });
+  const shop = await db.shop.create({ data: { shopDomain: `storefront-${randomUUID()}.myshopify.com` } });
   shops.push(shop.id);
   return shop;
 };

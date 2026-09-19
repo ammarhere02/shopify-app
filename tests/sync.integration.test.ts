@@ -58,7 +58,7 @@ const rows = () =>
 
 beforeEach(async () => {
   shop = await db.shop.create({
-    data: { shopDomain: `phase2-${randomUUID()}.myshopify.com` },
+    data: { shopDomain: `sync-${randomUUID()}.myshopify.com` },
   });
   shops.push(shop.id);
 });
@@ -100,7 +100,7 @@ describe("sync with real MySQL", () => {
       },
     });
     const other = await db.shop.create({
-      data: { shopDomain: `phase2-other-${randomUUID()}.myshopify.com` },
+      data: { shopDomain: `sync-other-${randomUUID()}.myshopify.com` },
     });
     shops.push(other.id);
     await db.product.create({

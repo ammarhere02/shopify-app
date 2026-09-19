@@ -28,7 +28,7 @@ const badge = {
 };
 const makeShop = async () => {
   const shop = await db.shop.create({
-    data: { shopDomain: `phase3-${randomUUID()}.myshopify.com` },
+    data: { shopDomain: `enrichment-${randomUUID()}.myshopify.com` },
   });
   shops.push(shop.id);
   return shop;
