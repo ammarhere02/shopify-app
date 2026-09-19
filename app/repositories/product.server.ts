@@ -63,3 +63,36 @@ export async function markStaleProducts(tx: Tx, shopId: number, runStartedAt: Da
   });
   return result.count;
 }
+
+/**
+ * Webhook path: write only if Shopify's copy is not older than ours.
+ * The row lock makes "compare then write" atomic, so two handlers (or a handler and a
+ * sync page) cannot interleave and leave the older version on top.
+ */
+export async function upsertProductIfNewer(
+  tx: Tx,
+  shopId: number,
+  mapped: MappedProduct,
+  syncedAt: Date,
+): Promise<{ skipped: boolean; inserted: boolean }> {
+  const gid = mapped.product.shopifyProductGid;
+  await tx.$queryRaw`SELECT id FROM products WHERE shopId = ${shopId} AND shopifyProductGid = ${gid} FOR UPDATE`;
+  const existing = await tx.product.findUnique({
+    where: { shopId_shopifyProductGid: { shopId, shopifyProductGid: gid } },
+    select: { updatedAtShopify: true },
+  });
+  if (existing && mapped.product.updatedAtShopify < existing.updatedAtShopify) {
+    return { skipped: true, inserted: false };
+  }
+  const { inserted } = await upsertProductWithVariants(tx, shopId, mapped, syncedAt);
+  return { skipped: false, inserted };
+}
+
+/** Soft delete one product. Idempotent: unknown or already-deleted products match 0 rows. */
+export async function softDeleteProductByGid(tx: Tx, shopId: number, shopifyProductGid: string) {
+  const result = await tx.product.updateMany({
+    where: { shopId, shopifyProductGid, deletedAt: null },
+    data: { deletedAt: new Date() },
+  });
+  return result.count;
+}

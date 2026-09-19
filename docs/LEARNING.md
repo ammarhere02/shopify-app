@@ -187,3 +187,39 @@ A **Products** page in the app: search the local catalog by title, filter by sta
 6. **Remove vs inactive.** "Remove badge" deletes the row and is idempotent. The **Active** checkbox hides a badge from the storefront while keeping its text and note.
 7. **Validation at the boundary, errors all at once.** The validator returns every field error together so the form can show them next to each field. Colours are stored uppercase so equal colours compare equal.
 8. **Soft-deleted products** are hidden from the list. Opening one directly shows a warning, and its enrichment is kept.
+
+---
+
+## Phase 4 — Product webhooks and idempotent receipts
+
+### What the merchant gets
+Editing or deleting a product in Shopify updates our local copy within seconds, without pressing Sync. Badges and notes are never touched.
+
+### The pipeline (one helper for all four topics)
+```text
+POST /webhooks/... → route action
+ → authenticate.webhook            [framework] raw body → HMAC check → 401 if wrong → parse JSON
+ → processWebhook                  [project]
+     shop row from the VERIFIED domain
+     claimReceipt: INSERT RECEIVED (unique webhookId)   duplicate → 200, stop
+     handler → finish(tx) marks PROCESSED in the same transaction as the data change
+     error → FAILED + bounded message + logger.error → 500
+```
+
+### Decisions and why
+1. **Verify before anything.** The URL is public. Only Shopify and we know the app secret, so the HMAC over the raw bytes is the proof of origin. The framework reads the body once as text; parsing first would change the bytes and the hash.
+2. **Re-fetch instead of mapping the payload.** The payload is REST-shaped (numeric id, lowercase status) and can hold an incomplete variant list. Mapping it would need a second mapper that could drift from the sync. We take only the id (and `updated_at` for a cheap skip) from the payload and read the product through the same GraphQL fields, `completeVariants`, `mapProductNode` and upsert the sync uses. Cost: one API call per event.
+3. **The receipt is the idempotency boundary.** `webhookId` is unique in MySQL, so "have I seen this?" is answered by the database, not by a read-then-write in code that two requests could both pass.
+4. **500 on failure, and FAILED can run again.** Shopify retries a failed delivery with the *same* webhook id. If dedupe blocked every repeat, retries could never succeed. The re-claim is a conditional `updateMany` matching the exact status and time we read, so when two retries race only one gets `count = 1`.
+5. **A fresh RECEIVED is left alone for 60 seconds.** Shopify can resend after 5 seconds while the first request is still working. After 60 seconds we assume the first one died and take over.
+6. **Ordering.** Re-fetching means an old event cannot bring old data. What remains is two writers racing (A reads v1, B writes v2, A writes v1). `upsertProductIfNewer` locks the product row and compares `updatedAtShopify` inside the transaction, so the older version is skipped.
+7. **Delete after update cannot resurrect.** A late update for a deleted product re-fetches `product: null` and is skipped.
+8. **Status codes are instructions to Shopify.** 200 = done, do not resend (success, duplicate, stale, unknown product, inactive shop). 500 = try again later. 401 = framework rejected the signature.
+9. **Tight API budget.** Shopify gives a delivery 5 seconds. The webhook client makes one attempt with a 3-second timeout inside a 4-second budget; a slow call becomes FAILED + 500 and Shopify's retry schedule does the waiting for us.
+10. **Lifecycle webhooks share the helper** but pass `requireActiveShop: false`: a repeated `app/uninstalled` arrives when the shop is already inactive and must still succeed.
+
+### Known limits
+- Processing is inside the request; there is no queue, dead-letter or replay. Reconcile is the repair tool.
+- No `products/create` subscription. A new product appears on its first update event or the next sync.
+- The full sync does not apply the newer-than guard (it must refresh `syncedAt` on every row for stale-marking), so it can briefly write a slightly older copy during a concurrent webhook; the next event or Reconcile fixes it.
+- The logger redacts only top-level sensitive key names, so webhook code never passes payloads to it.

@@ -16,10 +16,8 @@ export const SHOP_QUERY = `#graphql
   }
 `;
 
-export const PRODUCTS_PAGE_QUERY = `#graphql
-  query ProductsPage($first: Int!, $after: String, $variantsFirst: Int!) {
-    products(first: $first, after: $after, sortKey: ID) {
-      nodes {
+// One field list for the sync page and the webhook re-fetch, so both always store the same shape.
+const PRODUCT_FIELDS = `
         id
         title
         handle
@@ -30,9 +28,22 @@ export const PRODUCTS_PAGE_QUERY = `#graphql
         variants(first: $variantsFirst) {
           nodes { id title sku price }
           pageInfo { hasNextPage endCursor }
-        }
+        }`;
+
+export const PRODUCTS_PAGE_QUERY = `#graphql
+  query ProductsPage($first: Int!, $after: String, $variantsFirst: Int!) {
+    products(first: $first, after: $after, sortKey: ID) {
+      nodes {${PRODUCT_FIELDS}
       }
       pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+// Webhook re-fetch of one product. Returns product: null when it no longer exists.
+export const PRODUCT_BY_ID_QUERY = `#graphql
+  query ProductById($id: ID!, $variantsFirst: Int!) {
+    product(id: $id) {${PRODUCT_FIELDS}
     }
   }
 `;

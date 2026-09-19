@@ -60,7 +60,7 @@ function nextCursor(
 }
 
 /** Network requests stay outside MySQL transactions. Never save a partial variant list. */
-async function completeVariants(
+export async function completeVariants(
   client: ShopifyClient,
   node: ShopifyProductNode,
   checkBudget: () => void,

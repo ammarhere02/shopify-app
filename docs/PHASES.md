@@ -21,7 +21,7 @@ Legend: `[x]` done · `[~]` partly done · `[ ]` not started
 | 1 | MySQL, schema, install lifecycle | F-01, F-02, §4.1 | [x] | |
 | 2 | GraphQL product sync | F-03, F-04, F-09, F-11, §4.2–4.3 | [~] live check pending | |
 | 3 | Admin UI: product search + enrichment editor | F-05 | [x] manual check pending | |
-| 4 | Product webhooks + receipts | F-08, §4.4 | [ ] | |
+| 4 | Product webhooks + receipts | F-08, §4.4 | [~] live checks pending | |
 | 5 | Developer API `/api/v1` + API keys | F-06, §4.5 | [ ] | |
 | 6 | App proxy + Theme App Extension | F-07, §4.6 | [ ] | |
 | 7 | Remaining tests | §5 Required tests | [ ] | |
@@ -42,8 +42,8 @@ Fix now (small):
 - [x] **Template leftover:** `app/routes/app.additional.tsx` is unused demo code. Remove.
 
 Fold into a later phase (not bugs today, but gaps against the PDF):
-- Webhook routes use `console.log`, not the structured logger (`app/lib/logger.server.ts`) → F-10. Fix in Phase 4.
-- `app/uninstalled` and `app/scopes_update` do not write `webhook_receipts`, so lifecycle webhooks have no dedupe record → Phase 4.
+- ~~Webhook routes use `console.log`, not the structured logger (`app/lib/logger.server.ts`) → F-10. Fix in Phase 4.~~ done in Phase 4
+- ~~`app/uninstalled` and `app/scopes_update` do not write `webhook_receipts`, so lifecycle webhooks have no dedupe record → Phase 4.~~ done in Phase 4
 - `shopify.app.toml` has no product webhook subscriptions and no `[app_proxy]` block; `extensions/` is empty → Phases 4 and 6.
 - Sync runs inside the request (60s budget). `POST /api/v1/syncs` must return **202** and 409 on conflict, so Phase 5 needs a decision on how the API starts a run without blocking.
 - `variants` has no inventory field. The PDF says "if authorized"; we only hold `read_products`. Document as a deliberate least-privilege choice in Phase 8.
@@ -90,19 +90,34 @@ Known limits: sync runs inside the request (60s budget, no queue); a crashed run
 
 Decisions: list + detail routes; keyset pagination on local id; "remove" deletes the row while `active = false` hides it; soft-deleted products are hidden from the list.
 
-## Phase 4 — Product webhooks  [ ]
+## Phase 4 — Product webhooks  [~]
 
-Goal: product update/delete in Shopify updates the local copy, verified and idempotent.
-- [ ] Subscribe `products/update`, `products/delete` in `shopify.app.toml`
-- [ ] HMAC verification on raw body via `authenticate.webhook`
-- [ ] Insert `webhook_receipts` first (`webhookId` unique) → duplicate = 200 with no side effects
-- [ ] Update: upsert using the same mapping/repository path as sync; ignore out-of-date events (`updatedAtShopify`)
-- [ ] Delete: soft-delete, keep enrichment
-- [ ] Receipt status `RECEIVED → PROCESSED/FAILED` with error; respond fast
-- [ ] Route lifecycle webhooks through receipts and the structured logger too
-- [ ] Tests: valid signature, invalid signature, duplicate delivery
+Code and automated tests done. Live checks pending (need a working HTTPS tunnel; the Cloudflare tunnel fails on the current network, use a hotspot or VPN).
 
-Decisions to discuss: use the webhook payload vs re-fetch the product by GID over GraphQL; what status code on processing failure (retry vs no retry); out-of-order events.
+- [x] Subscribed `products/update`, `products/delete` in `shopify.app.toml` (config validates)
+- [x] HMAC verification on raw body via `authenticate.webhook` in all four routes
+- [x] `webhook_receipts` claimed first (`webhookId` unique) → duplicate = 200 with no side effects
+- [x] Atomic re-claim of `FAILED` receipts and of `RECEIVED` older than 60s
+- [x] Update: GraphQL re-fetch + same mapping/repository path as sync; stale events skipped; newer-than guard inside the transaction
+- [x] Delete: soft-delete by GID, variants and enrichment kept
+- [x] Receipt `RECEIVED → PROCESSED/FAILED`, bounded error text; failure returns 500 so Shopify retries
+- [x] Unknown/uninstalled shop → 200 + receipt note; missing session → FAILED + 500; product gone → skipped
+- [x] Lifecycle webhooks use receipts and the structured logger (no `console.log` left)
+- [x] Tests: unit (12) + real MySQL (18) including real-HMAC route tests: valid, forged, tampered, duplicate
+- [x] New query validated with the Shopify AI Toolkit against 2026-07 (`read_products`)
+
+Manual dev-store checklist:
+- [ ] 1. App started through a public HTTPS tunnel
+- [ ] 2. Product webhook subscriptions active (`shopify app dev` output / Partner dashboard → app → webhooks)
+- [ ] 3–4. Edit a product title in Shopify Admin → local title changes without pressing Sync
+- [ ] 5–6. Same delivery twice → one receipt, no second effect (duplicates are hard to force; covered by automated tests if not reproducible)
+- [ ] 7–9. Delete a disposable product → local row has `deletedAt`, enrichment row still exists
+- [ ] 10. Logs show `webhook.processed` with shopId/topic/webhookId and no payload or secrets
+- [ ] 11. Receipt row is `PROCESSED`
+- [ ] 12–13. Safe failure: stop MySQL briefly or delete the shop's session rows, edit a product → 500 and receipt `FAILED`; restore → Shopify's retry turns it `PROCESSED`
+- [ ] 14. Uninstall/reinstall still works and writes receipts
+
+Known limits: synchronous processing, no queue or replay of our own; after Shopify's retries run out a receipt stays `FAILED` and Reconcile repairs data; no `products/create` subscription (first update or next sync creates the row); the full sync does not apply the newer-than guard.
 
 ## Phase 5 — Developer API `/api/v1`  [ ]
 
