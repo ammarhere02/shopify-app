@@ -4,10 +4,8 @@ import { useLoaderData, useNavigate } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { requireActiveShop } from "../services/shop.server";
-import {
-  listProducts,
-  PRODUCT_STATUSES,
-} from "../repositories/enrichment.server";
+import { listProducts } from "../repositories/enrichment.server";
+import { PRODUCT_STATUSES } from "../lib/product-status";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);

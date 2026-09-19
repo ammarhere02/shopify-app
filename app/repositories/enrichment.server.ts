@@ -1,14 +1,14 @@
 import type { Prisma } from "@prisma/client";
 import db from "../db.server";
+import type { ProductStatus } from "../lib/product-status";
 import type { EnrichmentInput } from "../services/enrichment-validation";
 
-export const PRODUCT_STATUSES = ["ACTIVE", "DRAFT", "ARCHIVED"] as const;
 export const DEFAULT_PAGE_SIZE = 20;
 export const MAX_PAGE_SIZE = 100;
 
 export type ProductListFilters = {
   query?: string;
-  status?: (typeof PRODUCT_STATUSES)[number];
+  status?: ProductStatus;
   hasBadge?: boolean;
   /** Local id of the last row on the previous page (keyset pagination). */
   afterId?: number;
