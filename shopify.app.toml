@@ -28,6 +28,12 @@ api_version = "2026-07"
   uri = "/webhooks/products/delete"
   topics = [ "products/delete" ]
 
+# Storefront bridge: https://<shop>/apps/product-badge/<rest> -> <app url>/proxy/<rest>, signed by Shopify.
+[app_proxy]
+url = "https://example.com/proxy"
+subpath = "product-badge"
+prefix = "apps"
+
 [auth]
 redirect_urls = [ "https://example.com/api/auth" ]
 

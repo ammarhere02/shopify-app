@@ -1,0 +1,88 @@
+{%- comment -%}
+  Product Badge app block.
+  Liquid only knows the current product and the merchant's block settings. The badge itself is
+  app data, fetched by assets/product-badge.js through the app proxy (/apps/product-badge/...).
+  Nothing is visible until an active badge arrives, so products without one show nothing.
+{%- endcomment -%}
+{%- if block.settings.show_badge and product -%}
+  <div
+    class="eh-product-badge eh-product-badge--align-{{ block.settings.alignment | escape }}"
+    data-eh-product-badge
+    data-product-id="{{ product.id }}"
+    data-badge-style="{{ block.settings.badge_style | escape }}"
+    data-text-size="{{ block.settings.text_size | escape }}"
+    data-design-mode="{{ request.design_mode }}"
+    style="--eh-badge-radius: {{ block.settings.corner_radius | default: 4 }}px;"
+    hidden
+    {{ block.shopify_attributes }}
+  >
+    <span class="eh-product-badge__label" data-eh-badge-label></span>
+    {%- if request.design_mode -%}
+      {%- comment -%} Theme editor only: keeps the block visible to the merchant. {%- endcomment -%}
+      <span class="eh-product-badge__placeholder" data-eh-badge-placeholder>
+        {{ 'product_badge.placeholder' | t }}
+      </span>
+    {%- endif -%}
+  </div>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Product Badge",
+  "target": "section",
+  "enabled_on": { "templates": ["product"] },
+  "stylesheet": "product-badge.css",
+  "javascript": "product-badge.js",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "show_badge",
+      "label": "Show badge",
+      "default": true
+    },
+    {
+      "type": "select",
+      "id": "alignment",
+      "label": "Alignment",
+      "options": [
+        { "value": "left", "label": "Left" },
+        { "value": "center", "label": "Center" },
+        { "value": "right", "label": "Right" }
+      ],
+      "default": "left"
+    },
+    {
+      "type": "select",
+      "id": "badge_style",
+      "label": "Badge style",
+      "info": "The badge color is set per product in the Product Enrichment Hub app.",
+      "options": [
+        { "value": "solid", "label": "Solid" },
+        { "value": "outline", "label": "Outline" }
+      ],
+      "default": "solid"
+    },
+    {
+      "type": "select",
+      "id": "text_size",
+      "label": "Text size",
+      "options": [
+        { "value": "small", "label": "Small" },
+        { "value": "medium", "label": "Medium" },
+        { "value": "large", "label": "Large" }
+      ],
+      "default": "medium"
+    },
+    {
+      "type": "range",
+      "id": "corner_radius",
+      "label": "Corner radius",
+      "min": 0,
+      "max": 20,
+      "step": 2,
+      "unit": "px",
+      "default": 4
+    }
+  ]
+}
+{% endschema %}

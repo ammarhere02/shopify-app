@@ -1,0 +1,61 @@
+# app/routes/ — flat file routes (`flatRoutes()` in `app/routes.ts`)
+
+## What this folder is
+Every URL the app answers. One file is one URL. A route does three things only: authenticate the caller, resolve the shop (tenant), and call a service or repository. There are four groups, each with its own authenticator:
+
+| Group | Files | Caller | Authenticated by |
+|---|---|---|---|
+| Admin pages | `app.*` | Merchant inside Shopify admin | `authenticate.admin` (session token) |
+| Webhooks | `webhooks.*` | Shopify | `authenticate.webhook` (HMAC over the raw body) |
+| Developer API | `api.v1.*` | Merchant's scripts | `withApiAuth` (bearer API key) |
+| Storefront bridge | `proxy.*` | Shoppers, through Shopify's app proxy | `authenticate.public.appProxy` (signed query) |
+
+File name = URL. `app.products.$id.tsx` → `/app/products/:id`. Anything under `app.` renders inside `app.tsx`.
+
+| File | URL | What it does |
+|---|---|---|
+| `app.tsx` | layout for `/app/*` | `authenticate.admin`, `AppProvider`, `NavMenu` (Home, Products). Add new admin pages to the NavMenu here |
+| `app._index.tsx` | `/app` | Loader: shop info, product/variant counts, latest sync run. Action: `intent=sync|reconcile` → `startSyncRun` + `runProductSync` (runs inside the request, 60s budget) |
+| `app.products._index.tsx` | `/app/products` | List. Filters from URL: `query`, `status`, `hasBadge`, `after` (keyset cursor = last local id). Unknown values are ignored |
+| `app.products.$id.tsx` | `/app/products/:id` | Editor. `:id` is the LOCAL product id, looked up with shopId (other shop → 404). Action: `intent=save` (validate → `saveEnrichment`) or `intent=remove` |
+| `webhooks.products.update.tsx` | POST `/webhooks/products/update` | `authenticate.webhook` → `handleProductUpdate` |
+| `webhooks.products.delete.tsx` | POST `/webhooks/products/delete` | `authenticate.webhook` → `handleProductDelete` |
+| `webhooks.app.uninstalled.tsx` | POST | `authenticate.webhook` → `processWebhook` → `recordUninstall`. Active shop NOT required (repeat deliveries arrive after uninstall) |
+| `webhooks.app.scopes_update.tsx` | POST | `processWebhook` → updates the session scope and `shops.scopes` |
+| `api.v1.products._index.tsx` | GET `/api/v1/products` | Filters `query`, `status`, `hasBadge`, `limit` (1–100), `cursor` (opaque). Bad values → 400 (stricter than the admin page on purpose) |
+| `api.v1.products.$id.tsx` | GET `/api/v1/products/:id` | `:id` = numeric SHOPIFY product id. Product + variants + enrichment. Other shop or soft-deleted → 404 |
+| `api.v1.products.$id.enrichment.tsx` | PUT, DELETE | PUT 201 created / 200 updated / 422 validation / 400 bad JSON / 413 too big. DELETE 204, idempotent; 404 only if the product is unknown |
+| `api.v1.syncs._index.tsx` | POST `/api/v1/syncs` | Body optional `{type}`. Gets the offline session FIRST (`unauthenticated.admin`), then `startSyncRun`, then runs the sync WITHOUT awaiting → 202 + `Location`. 409 `sync_in_progress` / `shop_session_unavailable` |
+| `api.v1.syncs.$id.tsx` | GET `/api/v1/syncs/:id` | Run looked up with `{ id, shopId }`; no `cursor` in the response |
+| `proxy.products.$id.tsx` | GET `/proxy/products/:id`, reached by shoppers as `https://<shop>/apps/product-badge/products/:id` | `authenticate.public.appProxy` (bad signature → 400) → shop from the SIGNED `shop` query param → `getStorefrontBadge`. 200 `{ badge: {text,color,textColor} \| null }` with `Cache-Control: public, max-age=60`; 429 + `Retry-After` when limited |
+| `proxy.badges.tsx` | GET `/proxy/badges?ids=1,2,3`, reached as `https://<shop>/apps/product-badge/badges?ids=...` | Product grids: one call for many cards. Same `authenticate.public.appProxy` and signed `shop` → `getStorefrontBadges`. 200 `{ badges: { "<shopifyProductId>": {text,color,textColor} } }` holding only products with a badge to show, `Cache-Control: public, max-age=60`; 400 `{ badges: {} }` `no-store` for an empty, malformed or >50 id list; 429 + `Retry-After` |
+| `auth.$.tsx`, `auth.login/` | auth | Template auth routes. Leave alone |
+| `_index/` | `/` | Template landing/login page |
+
+## Pattern for an admin page
+```ts
+const { session, admin } = await authenticate.admin(request);
+const shop = await requireActiveShop(session.shop); // tenant
+// then call repositories/services with shop.id
+```
+Export `headers` with `boundary.headers` (copy from an existing page). Thrown `Response` objects must reach the framework unchanged (re-auth redirects).
+
+## Pattern for a webhook route
+```ts
+const webhook = await authenticate.webhook(request); // [framework] reads the raw body, checks HMAC, throws 401/400
+return handleX(webhook);                              // [project] receipt + dedupe + work + status code
+```
+Nothing may read `request` before `authenticate.webhook` (the body can be read once). The route URL must equal the `uri` in `shopify.app.toml`. Use `webhook.shop` for the tenant, never a payload field. `webhook.admin`/`session` are undefined when the shop has no offline session.
+
+## Pattern for an API route
+```ts
+export const loader = ({ request, params }) =>
+  withApiAuth(request, { methods: ["GET"] }, async ({ shop }) => json({ data }));
+```
+Resource routes have no component. `loader` receives GET, `action` receives every other method, so each file exports both and the unused one only produces the 405 envelope. Throw `ApiError(status, code, message, details?)` for every failure. Admin pages use the LOCAL product id in URLs; the API uses the SHOPIFY numeric id.
+
+## UI
+Polaris web components (`<s-page>`, `<s-section>`, `<s-text-field>`, `<s-table>`…), typed by `@shopify/polaris-types`. Form values are held in React state and sent with `fetcher.submit`; inputs use `onInput`/`onChange` with `e.currentTarget.value`. Internal links: `<s-link href="/app/...">`.
+
+## Known gaps
+No admin page for API keys. No `products/create` subscription: new products arrive through their first `products/update` or the next sync.

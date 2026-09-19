@@ -19,9 +19,13 @@
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
     "test": "vitest run",
-    "test:integration": "node scripts/run-integration.mjs"
+    "test:integration": "node scripts/run-integration.mjs",
+    "api-key": "vite-node --config vitest.config.ts scripts/api-key.ts"
   },
   "type": "module",
+  "prisma": {
+    "schema": "db/schema.prisma"
+  },
   "engines": {
     "node": ">=20.19 <22 || >=22.12"
   },

@@ -17,10 +17,10 @@ One section per phase: **what** we built, **why**, and **alternatives**.
 - `DATABASE_URL` tells Prisma where MySQL is. `.env` is git-ignored (secrets never get committed); `.env.example` has placeholders and *is* committed. We added `!.env.example` to `.gitignore` because the template ignored `.env.*`.
 - Shopify keys are not in `.env`: `shopify app dev` injects `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` and `SCOPES` at runtime from your Partner app.
 
-### 3. `prisma/schema.prisma`
+### 3. `db/schema.prisma` (was `prisma/schema.prisma` until the folder was renamed to match the assignment layout)
 **Prisma** is an ORM: you describe tables once, and it generates (a) SQL migrations and (b) a typed client (`db.product.findMany(...)`).
 - `provider = "mysql"` was `"sqlite"`. The assignment rejects SQLite.
-- We deleted the old SQLite migration: migrations are database-specific, so we started fresh with `prisma/migrations/<timestamp>_init_mysql_schema/migration.sql`. **Open that file.** It's the real SQL (CREATE TABLE, UNIQUE, INDEX, FOREIGN KEY).
+- We deleted the old SQLite migration: migrations are database-specific, so we started fresh with `db/migrations/<timestamp>_init_mysql_schema/migration.sql`. **Open that file.** It's the real SQL (CREATE TABLE, UNIQUE, INDEX, FOREIGN KEY).
 - `@@map("products")` → code uses `Product`, and the MySQL table is named `products` (snake_case, as the assignment names them).
 
 Model by model:
@@ -223,3 +223,85 @@ POST /webhooks/... → route action
 - No `products/create` subscription. A new product appears on its first update event or the next sync.
 - The full sync does not apply the newer-than guard (it must refresh `syncedAt` on every row for stale-marking), so it can briefly write a slightly older copy during a concurrent webhook; the next event or Reconcile fixes it.
 - The logger redacts only top-level sensitive key names, so webhook code never passes payloads to it.
+
+---
+
+## Phase 5 — Developer API `/api/v1` and API keys
+
+### What it is for
+A script or another system can read products and manage badges without a browser: it sends `Authorization: Bearer <key>`. The key decides which shop it is talking about.
+
+### The pipeline (`withApiAuth`, same idea as `processWebhook`)
+```text
+request → request id → method check → failed-login gate (per IP)
+ → Bearer key → SHA-256 → developer_api_keys row + its shop     any failure → same 401
+ → per-key rate limit                                           → 429 + Retry-After
+ → handler({ shop })  → repositories with shop.id
+ → ApiError → { error: { code, message, details?, requestId } } ; anything else → 500 envelope
+```
+
+### Decisions and why
+1. **SHA-256, not bcrypt.** Slow salted hashes protect short human passwords from guessing. Our key is 256 random bits, which cannot be guessed, and we need to FIND the row from the key: an unsalted hash is a value we can index and look up. A database leak still does not reveal usable keys.
+2. **The key is the tenant.** There is no `shop` parameter anywhere in the API. Shop B's key asking for shop A's product gets 404, the same as a product that does not exist.
+3. **Identical 401s.** Missing, malformed, unknown, revoked and uninstalled-shop all return the same body. Different answers would tell an attacker which guesses were "warmer". The reason is kept in the log line.
+4. **Numeric Shopify id in the URL, GID in the body.** `gid://shopify/Product/1` contains slashes, which are fragile inside a path. We accept `/products/1`, validate digits only, rebuild the GID, and always return full GIDs. Local autoincrement ids never appear.
+5. **400 vs 422.** 400 = we could not understand the request (bad JSON, bad filter, bad cursor, bad id). 422 = we understood it but the badge breaks a rule; `details` lists every field error from the shared `validateEnrichment`.
+6. **Opaque cursor.** base64url of `{id}`. Clients treat it as a token, so we can change pagination later without breaking them.
+7. **202 for syncs.** The route creates the run, starts `runProductSync` without awaiting it and returns the run id with a `Location` header; the client polls. The Shopify session is fetched BEFORE the run is created, otherwise a shop without a token would be stuck with a RUNNING row for 15 minutes.
+8. **`unauthenticated.admin(shop)`** is the framework's way to call Shopify with the stored offline token when there is no browser session, as here.
+9. **Rate limits keyed after auth.** The per-key counter uses the key's database id. Keying by the raw token would let random tokens fill memory. Failed logins are counted per IP separately.
+10. **`internalNote` is returned here** because the key holder is the merchant and can also write it. The storefront endpoint in Phase 6 must use its own serializer without it.
+11. **Keys are created with a CLI script**, which prints the plaintext once. A merchant-facing page for keys is a listed stretch goal.
+
+### Known limits
+- In-memory rate limiting: one process, reset on restart. Several instances would need a shared store.
+- No durable worker behind the 202. A restart mid-sync leaves the run RUNNING until the abandon rule.
+- `X-Forwarded-For` is trusted for the failed-login limit; behind a different proxy setup this needs review.
+
+---
+
+## Phase 6 — App proxy and the Product Badge theme block
+
+### What the merchant and shopper get
+The merchant adds a **Product Badge** block to the product template in the theme editor and styles it. Shoppers see the product's active badge. Products without one show nothing.
+
+### Two pieces that meet in the browser
+```text
+Theme app extension (runs in Shopify's theme)        Our app (runs on our server)
+ block Liquid → hidden container + product.id         /proxy/products/:id
+ deferred JS  → fetch /apps/product-badge/products/ID   ↑
+                     └── Shopify app proxy: adds shop + timestamp + signature, forwards ──┘
+```
+Liquid can read Shopify data (`product.id`) but not our MySQL. The app proxy is the bridge: the browser calls the store's own domain, Shopify signs the request with our app secret and forwards it, and `authenticate.public.appProxy` checks that signature.
+
+### Decisions and why
+1. **App proxy instead of a metafield.** A metafield read from Liquid would avoid the request, but writing it needs `write_products`, a mutation and keeping two stores in step. The proxy keeps `read_products` as the only scope and MySQL as the single source of truth for app data.
+2. **The shop comes from the signed `shop` parameter.** A shopper cannot choose the tenant: changing `shop` breaks the signature (tested: 400).
+3. **The signature proves "Shopify forwarded this", not "who the shopper is".** Anyone can open the proxy URL, so the response must be safe for the whole internet. `getPublicBadge` selects only `badgeText`, `badgeColor`, `active`; `internalNote` is never loaded on this path.
+4. **One empty answer.** Unknown shop, uninstalled shop, bad id, draft or deleted product, no badge, inactive badge: all return 200 `{ "badge": null }`. No console errors on normal pages, and nothing to probe.
+5. **Cache 60 seconds, public.** The answer is the same for every shopper. Cost: a badge edit can take up to a minute to show.
+6. **Safe rendering.** Text is inserted with `textContent`, so `<script>` in a badge would display as text. The colour is validated on write, again on the server before sending, and again in JS before it becomes a CSS variable.
+7. **Accessibility.** The badge is always text, so meaning never depends on colour. The server picks black or white text by WCAG contrast (tested ≥4.5:1 over thousands of colours). Outline style uses the theme's own text colour.
+8. **Block settings control layout, the app controls content and colour.** One place to change each thing.
+9. **Hidden until loaded.** No layout jump, and a failed request simply leaves the page as it was. Only the theme editor shows a placeholder, so the merchant can still find and configure the block.
+10. **Assets declared in the schema.** Shopify loads the JS deferred and once per page from its CDN, and the CSS classes are all prefixed `eh-product-badge`.
+
+### Enhancement: badges on product cards (not required by the PDF)
+The PDF asks for a block "suitable for a product template". Showing the badge in grids (home-page featured collection, collection pages) is extra, so it was built without touching the required block or endpoint.
+
+1. **How the card's product reaches an app block.** Horizon builds a grid by rendering one static `_product-card` theme block per product with `closest.product: product`, and that block's schema lists `{ "type": "@app" }`. So the merchant can add an app block inside Product card once, and the theme repeats it for every card. Our block has a `product` setting with `autofill: true`; its value is a dynamic source, which inside a card resolves to that card's product. Liquid then prints only `product.id`.
+2. **Why not an app embed.** An app embed sees only global Liquid objects, not each card's product. It would have to find cards by scraping the theme's HTML, which breaks when the theme changes. The nested app block uses only documented mechanisms. Cost: it works only on themes whose card accepts `@app` blocks.
+3. **A separate block, not a changed one.** The product-page block is the assignment's requirement and is limited to product templates. The card block has a different input (a setting instead of the template's product) and different defaults, so it is its own file and the required one is untouched.
+4. **One request per page, not per card.** The script gathers every container, removes duplicate ids, sorts them (same page → same URL → the 60s cache can answer) and calls `/apps/product-badge/badges?ids=...` once per 50 products. The server runs one query with `shopId` and `IN (...)`.
+5. **Bounded and strict input.** 1–50 ids, each `^[1-9]\d{0,19}$`. Anything else is 400 and not cached: a bad list is a client bug, unlike "no badge", which is a normal answer. The check runs before any database work.
+6. **Absent means unavailable.** The map holds only products with a badge to show. Unknown, another shop's, draft, deleted, no badge and inactive are all just missing, so the endpoint still reveals nothing. Keys are Shopify product ids, which the page already shows; local database ids never leave the server.
+7. **Same rate limit, one hit per request.** Both endpoints share the limiter, so batching cannot be used to get around it and a grid costs the same as one product view.
+8. **No movement.** "Reserve space" keeps an invisible box of one badge's height in every card, so badges appear without shifting the grid and rows stay aligned. It can be switched off.
+9. **Cards that arrive later.** A `MutationObserver` looks only for our own `data-eh-product-badge` attribute, waits 150 ms for the DOM to settle, then sends one request for the new cards. This covers filters and "load more" without knowing anything about the theme.
+
+### Known limits
+- One proxy request per page view, one per 50 products (cached for 60 seconds).
+- Card badges need a theme whose product card accepts `@app` blocks and passes its product down (Horizon). That autofill connects the setting by itself inside a card is not yet confirmed on the dev store; if it does not, the merchant connects it with the dynamic-source icon.
+- In-memory rate limit, single process.
+- Needs an Online Store 2.0 theme whose product section accepts `@app` blocks.
+- With JavaScript disabled the block stays hidden.

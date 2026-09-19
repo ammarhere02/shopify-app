@@ -1,0 +1,53 @@
+/* Every class is prefixed "eh-product-badge" so nothing collides with the merchant's theme. */
+.eh-product-badge {
+  display: flex;
+  margin: 0.5rem 0;
+}
+.eh-product-badge[hidden] {
+  display: none;
+}
+/* Product cards: keep the badge's height while it loads and on cards without one, so cards never move. */
+.eh-product-badge--card {
+  margin: 0;
+}
+.eh-product-badge--card[data-reserve-space="true"] {
+  min-height: calc(var(--eh-badge-font-size, 0.875rem) * 1.9 + 4px);
+}
+.eh-product-badge--card[data-reserve-space="true"][hidden] {
+  display: flex;
+  visibility: hidden;
+}
+.eh-product-badge--align-left { justify-content: flex-start; }
+.eh-product-badge--align-center { justify-content: center; }
+.eh-product-badge--align-right { justify-content: flex-end; }
+
+.eh-product-badge__label {
+  display: inline-block;
+  padding: 0.25em 0.75em;
+  border: 2px solid var(--eh-badge-color, #1a7f37);
+  border-radius: var(--eh-badge-radius, 4px);
+  background: var(--eh-badge-color, #1a7f37);
+  color: var(--eh-badge-text-color, #ffffff);
+  font-size: var(--eh-badge-font-size, 0.875rem);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.eh-product-badge__label:empty {
+  display: none;
+}
+/* Outline: theme text color on a transparent background stays readable for any badge color. */
+.eh-product-badge[data-badge-style="outline"] .eh-product-badge__label {
+  background: transparent;
+  color: inherit;
+}
+.eh-product-badge[data-text-size="small"] { --eh-badge-font-size: 0.75rem; }
+.eh-product-badge[data-text-size="medium"] { --eh-badge-font-size: 0.875rem; }
+.eh-product-badge[data-text-size="large"] { --eh-badge-font-size: 1.125rem; }
+
+.eh-product-badge__placeholder {
+  padding: 0.25em 0.75em;
+  border: 1px dashed currentColor;
+  font-size: 0.875rem;
+  opacity: 0.7;
+}

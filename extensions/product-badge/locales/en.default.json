@@ -1,0 +1,8 @@
+{
+  "product_badge": {
+    "placeholder": "Product Badge: this product has no active badge"
+  },
+  "product_card_badge": {
+    "no_product": "Product Card Badge: connect the Product setting to the card's product"
+  }
+}

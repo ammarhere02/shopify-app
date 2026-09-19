@@ -93,3 +93,39 @@ export async function removeEnrichment(shopId: number, productId: number) {
   await db.productEnrichment.deleteMany({ where: { productId } });
   return true;
 }
+
+/**
+ * STOREFRONT read. Selects only publishable columns, so internalNote cannot leak even by mistake.
+ * Returns null unless the product is live (ACTIVE, not deleted) and its badge is active.
+ */
+export async function getPublicBadge(shopId: number, shopifyProductGid: string) {
+  const product = await db.product.findFirst({
+    where: { shopId, shopifyProductGid, deletedAt: null, status: "ACTIVE" },
+    select: { enrichment: { select: { badgeText: true, badgeColor: true, active: true } } },
+  });
+  const badge = product?.enrichment;
+  return badge?.active ? { badgeText: badge.badgeText, badgeColor: badge.badgeColor } : null;
+}
+
+/**
+ * STOREFRONT read for product grids: one query for a bounded list of products, same rules and the
+ * same public-only columns as getPublicBadge. Products that do not qualify are simply not returned.
+ */
+export async function getPublicBadges(shopId: number, shopifyProductGids: string[]) {
+  if (shopifyProductGids.length === 0) return [];
+  const products = await db.product.findMany({
+    where: {
+      shopId,
+      shopifyProductGid: { in: shopifyProductGids },
+      deletedAt: null,
+      status: "ACTIVE",
+      enrichment: { active: true },
+    },
+    select: { shopifyProductGid: true, enrichment: { select: { badgeText: true, badgeColor: true } } },
+  });
+  return products.flatMap((p) =>
+    p.enrichment
+      ? [{ shopifyProductGid: p.shopifyProductGid, badgeText: p.enrichment.badgeText, badgeColor: p.enrichment.badgeColor }]
+      : [],
+  );
+}

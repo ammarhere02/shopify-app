@@ -1,0 +1,106 @@
+{%- comment -%}
+  Product Card Badge app block: the same badge, for product cards in grids (home-page featured
+  collection, collection pages, search, recommendations).
+  The merchant adds it once inside the theme's Product card block; the theme repeats the card for
+  every product, and the "product" setting below is connected to the card's own product
+  (dynamic source "closest product", filled in by autofill). Liquid prints only the product id.
+  assets/product-badge.js collects every card on the page and asks the app proxy for all of them in
+  one request. Cards without an active badge stay empty.
+{%- endcomment -%}
+{%- assign card_product = block.settings.product -%}
+{%- if block.settings.show_badge -%}
+  {%- if card_product -%}
+    <div
+      class="eh-product-badge eh-product-badge--card eh-product-badge--align-{{ block.settings.alignment | escape }}"
+      data-eh-product-badge
+      data-product-id="{{ card_product.id }}"
+      data-badge-style="{{ block.settings.badge_style | escape }}"
+      data-text-size="{{ block.settings.text_size | escape }}"
+      data-reserve-space="{{ block.settings.reserve_space }}"
+      style="--eh-badge-radius: {{ block.settings.corner_radius | default: 4 }}px;"
+      hidden
+      {{ block.shopify_attributes }}
+    >
+      <span class="eh-product-badge__label" data-eh-badge-label></span>
+    </div>
+  {%- elsif request.design_mode -%}
+    {%- comment -%} Theme editor only: tells the merchant why nothing can show yet. {%- endcomment -%}
+    <div class="eh-product-badge" {{ block.shopify_attributes }}>
+      <span class="eh-product-badge__placeholder">{{ 'product_card_badge.no_product' | t }}</span>
+    </div>
+  {%- endif -%}
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Product Card Badge",
+  "target": "section",
+  "stylesheet": "product-badge.css",
+  "javascript": "product-badge.js",
+  "settings": [
+    {
+      "type": "product",
+      "id": "product",
+      "label": "Product",
+      "info": "Inside a product card, keep this connected to the card's product (dynamic source) so each card shows its own badge.",
+      "autofill": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_badge",
+      "label": "Show badge",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "reserve_space",
+      "label": "Reserve space for the badge",
+      "info": "Keeps every card the same height and stops cards moving when badges load.",
+      "default": true
+    },
+    {
+      "type": "select",
+      "id": "alignment",
+      "label": "Alignment",
+      "options": [
+        { "value": "left", "label": "Left" },
+        { "value": "center", "label": "Center" },
+        { "value": "right", "label": "Right" }
+      ],
+      "default": "left"
+    },
+    {
+      "type": "select",
+      "id": "badge_style",
+      "label": "Badge style",
+      "info": "The badge color is set per product in the Product Enrichment Hub app.",
+      "options": [
+        { "value": "solid", "label": "Solid" },
+        { "value": "outline", "label": "Outline" }
+      ],
+      "default": "solid"
+    },
+    {
+      "type": "select",
+      "id": "text_size",
+      "label": "Text size",
+      "options": [
+        { "value": "small", "label": "Small" },
+        { "value": "medium", "label": "Medium" },
+        { "value": "large", "label": "Large" }
+      ],
+      "default": "small"
+    },
+    {
+      "type": "range",
+      "id": "corner_radius",
+      "label": "Corner radius",
+      "min": 0,
+      "max": 20,
+      "step": 2,
+      "unit": "px",
+      "default": 4
+    }
+  ]
+}
+{% endschema %}

@@ -21,9 +21,9 @@ Legend: `[x]` done · `[~]` partly done · `[ ]` not started
 | 1 | MySQL, schema, install lifecycle | F-01, F-02, §4.1 | [x] | |
 | 2 | GraphQL product sync | F-03, F-04, F-09, F-11, §4.2–4.3 | [~] live check pending | |
 | 3 | Admin UI: product search + enrichment editor | F-05 | [x] manual check pending | |
-| 4 | Product webhooks + receipts | F-08, §4.4 | [~] live checks pending | |
-| 5 | Developer API `/api/v1` + API keys | F-06, §4.5 | [ ] | |
-| 6 | App proxy + Theme App Extension | F-07, §4.6 | [ ] | |
+| 4 | Product webhooks + receipts | F-08, §4.4 | [~] core live checks done, 5 pending | |
+| 5 | Developer API `/api/v1` + API keys | F-06, §4.5 | [~] manual curl check pending | |
+| 6 | App proxy + Theme App Extension | F-07, §4.6 | [~] live storefront checks pending | |
 | 7 | Remaining tests | §5 Required tests | [ ] | |
 | 8 | Docs, demo, submission package | §7 | [ ] | |
 
@@ -44,8 +44,8 @@ Fix now (small):
 Fold into a later phase (not bugs today, but gaps against the PDF):
 - ~~Webhook routes use `console.log`, not the structured logger (`app/lib/logger.server.ts`) → F-10. Fix in Phase 4.~~ done in Phase 4
 - ~~`app/uninstalled` and `app/scopes_update` do not write `webhook_receipts`, so lifecycle webhooks have no dedupe record → Phase 4.~~ done in Phase 4
-- `shopify.app.toml` has no product webhook subscriptions and no `[app_proxy]` block; `extensions/` is empty → Phases 4 and 6.
-- Sync runs inside the request (60s budget). `POST /api/v1/syncs` must return **202** and 409 on conflict, so Phase 5 needs a decision on how the API starts a run without blocking.
+- ~~`shopify.app.toml` has no product webhook subscriptions and no `[app_proxy]` block; `extensions/` is empty.~~ done in Phases 4 and 6
+- ~~Sync runs inside the request (60s budget). `POST /api/v1/syncs` must return **202** and 409 on conflict.~~ done in Phase 5 (background run, not awaited)
 - `variants` has no inventory field. The PDF says "if authorized"; we only hold `read_products`. Document as a deliberate least-privilege choice in Phase 8.
 
 ---
@@ -92,7 +92,7 @@ Decisions: list + detail routes; keyset pagination on local id; "remove" deletes
 
 ## Phase 4 — Product webhooks  [~]
 
-Code and automated tests done. Live checks pending (need a working HTTPS tunnel; the Cloudflare tunnel fails on the current network, use a hotspot or VPN).
+Code and automated tests done. Live update and delete verified on the dev store; items 5–6, 9, 10, 12–14 still pending.
 
 - [x] Subscribed `products/update`, `products/delete` in `shopify.app.toml` (config validates)
 - [x] HMAC verification on raw body via `authenticate.webhook` in all four routes
@@ -103,50 +103,82 @@ Code and automated tests done. Live checks pending (need a working HTTPS tunnel;
 - [x] Receipt `RECEIVED → PROCESSED/FAILED`, bounded error text; failure returns 500 so Shopify retries
 - [x] Unknown/uninstalled shop → 200 + receipt note; missing session → FAILED + 500; product gone → skipped
 - [x] Lifecycle webhooks use receipts and the structured logger (no `console.log` left)
-- [x] Tests: unit (12) + real MySQL (18) including real-HMAC route tests: valid, forged, tampered, duplicate
+- [x] Tests: unit (13) + real MySQL (18) including real-HMAC route tests: valid, forged, tampered, duplicate
 - [x] New query validated with the Shopify AI Toolkit against 2026-07 (`read_products`)
 
-Manual dev-store checklist:
-- [ ] 1. App started through a public HTTPS tunnel
-- [ ] 2. Product webhook subscriptions active (`shopify app dev` output / Partner dashboard → app → webhooks)
-- [ ] 3–4. Edit a product title in Shopify Admin → local title changes without pressing Sync
-- [ ] 5–6. Same delivery twice → one receipt, no second effect (duplicates are hard to force; covered by automated tests if not reproducible)
-- [ ] 7–9. Delete a disposable product → local row has `deletedAt`, enrichment row still exists
-- [ ] 10. Logs show `webhook.processed` with shopId/topic/webhookId and no payload or secrets
-- [ ] 11. Receipt row is `PROCESSED`
-- [ ] 12–13. Safe failure: stop MySQL briefly or delete the shop's session rows, edit a product → 500 and receipt `FAILED`; restore → Shopify's retry turns it `PROCESSED`
-- [ ] 14. Uninstall/reinstall still works and writes receipts
+Manual dev-store checklist. Evidence read from the dev database on 2026-09-19 (`webhook_receipts`, `products`, `sync_runs`); items without database evidence stay pending.
+- [x] 1. App reached through a public HTTPS tunnel (real deliveries arrived from Shopify)
+- [x] 2. Product webhook subscriptions active (both topics delivered)
+- [x] 3–4. Product edited in Shopify Admin → local row updated with no sync run. Receipt #1 `PRODUCTS_UPDATE`, received 11:21:14.385, `PROCESSED` 11:21:14.956 (0.57s, inside Shopify's 5s limit). Product "Videographer Snowboard": `updatedAtShopify` 11:21:12, `syncedAt` 11:21:14; the last sync run (#4) was at 08:28
+- [ ] 5–6. Same delivery twice → one receipt, no second effect. Not reproduced live; covered by automated tests (service level and signed route request)
+- [x] 7–8. Product deleted in Shopify → local row soft-deleted. Receipt #2 `PRODUCTS_DELETE` `PROCESSED` in 14ms. "Selling Plans Ski Wax": `deletedAt` set, row and its 3 variants still present
+- [ ] 9. Enrichment kept after a live delete. Not shown: the deleted product had no badge. Repeat with a disposable product that has a badge (automated test covers it)
+- [ ] 10. Log lines reviewed for `webhook.processed` metadata and absence of payload/secrets (terminal output not captured)
+- [x] 11. Receipts reach `PROCESSED` (both rows, `error` NULL, `shopId` set)
+- [ ] 12–13. Safe failure → 500 + `FAILED`, then Shopify's retry → `PROCESSED`. No `FAILED` row exists yet
+- [ ] 14. Uninstall/reinstall writes lifecycle receipts. No `APP_UNINSTALLED` / `APP_SCOPES_UPDATE` receipt exists yet
 
 Known limits: synchronous processing, no queue or replay of our own; after Shopify's retries run out a receipt stays `FAILED` and Reconcile repairs data; no `products/create` subscription (first update or next sync creates the row); the full sync does not apply the newer-than guard.
 
-## Phase 5 — Developer API `/api/v1`  [ ]
+## Phase 5 — Developer API `/api/v1`  [~]
 
-Goal: versioned JSON API secured by API key, tenant taken from the key only.
-- [ ] API key: generate, show plaintext once, store SHA-256 hash + prefix, revoke, `lastUsedAt`
-- [ ] Auth helper: `Authorization: Bearer <key>` → shop; 401 otherwise; refuse uninstalled shops
-- [ ] `GET /api/v1/products` (query, status, hasBadge, cursor) — 200/400/401
-- [ ] `GET /api/v1/products/{shopifyGid}` — 200/401/404
-- [ ] `PUT /api/v1/products/{shopifyGid}/enrichment` — 200/201/400|422/401/404
-- [ ] `DELETE /api/v1/products/{shopifyGid}/enrichment` — idempotent 204
-- [ ] `POST /api/v1/syncs` — 202/401/409/429 · `GET /api/v1/syncs/{id}` — 200/401/404
-- [ ] Error envelope `{ error: { code, message, details?, requestId } }`
-- [ ] Simple rate limit on API-key routes
-- [ ] Request tests: auth failure, tenant scoping, valid write, invalid payload, missing product
+Code and automated tests done. Manual `curl` check against the running app pending.
 
-Decisions to discuss: GID in a URL path (encoding vs numeric tail); how `POST /syncs` returns 202 without a queue; in-memory vs DB rate limiting; where the merchant creates keys.
+- [x] API key: `eh_live_` + 32 random bytes, SHA-256 hash + prefix stored, plaintext printed once, revoke, throttled `lastUsedAt`
+- [x] Key tool: `npm run api-key -- create|list|revoke <shop-domain> [label|prefix]` (admin UI for keys stays a stretch goal)
+- [x] `withApiAuth`: request id, Bearer auth, tenant from the key, uniform 401, refuses uninstalled shops
+- [x] `GET /api/v1/products` (query, status, hasBadge, limit, opaque cursor) — 200/400/401
+- [x] `GET /api/v1/products/{id}` — 200/400/401/404 (`{id}` = numeric Shopify product id; responses carry full GIDs)
+- [x] `PUT /api/v1/products/{id}/enrichment` — 201/200/400/413/422/401/404
+- [x] `DELETE /api/v1/products/{id}/enrichment` — idempotent 204, 404 for unknown product
+- [x] `POST /api/v1/syncs` — 202 + `Location`, 400/401/409/429 · `GET /api/v1/syncs/{id}` — 200/400/401/404
+- [x] Error envelope `{ error: { code, message, details?, requestId } }` for every failure incl. 405 and 500; `X-Request-Id` header
+- [x] Rate limits: 60/min per key, 5/min per key for sync starts, 20 failed logins/min per IP; `Retry-After`
+- [x] Tests: 5 unit + 21 request tests on real MySQL (auth failure, tenant scoping, valid write, invalid payload, missing product, rate limit, sync)
 
-## Phase 6 — App proxy + Theme App Extension  [ ]
+Manual check:
+- [ ] `npm run api-key -- create <shop-domain> "demo"` prints a key once
+- [ ] `curl -H "Authorization: Bearer <key>" <app-url>/api/v1/products` → 200 with synced products
+- [ ] PUT a badge with curl → it appears in the admin Products page
+- [ ] No/invalid key → 401 envelope
+- [ ] `POST /api/v1/syncs` → 202, then `GET` the `Location` until `SUCCEEDED`
+- [ ] Revoke the key → 401
 
-Goal: badge renders on the product page through a merchant-enabled app block.
-- [ ] `[app_proxy]` in toml → `/apps/product-badge/...`; verify with `authenticate.public.appProxy`
-- [ ] Response contains only `badgeText`, `badgeColor` (never `internalNote`); cache policy; empty state
-- [ ] `extensions/product-badge` with `blocks/` Liquid + schema: placement/alignment, style/colour, text size, show/hide, sensible defaults
-- [ ] Escaped output, safe DOM insertion (`textContent`), namespaced CSS, small deferred JS, loading/error behaviour
-- [ ] Badge does not rely on colour alone; readable contrast
-- [ ] Rate limit on the storefront endpoint
-- [ ] Verification checklist: active, inactive, missing badge
+Known limits: rate limits are in memory (single process, reset on restart); the 202 sync has no durable worker (restart leaves the run RUNNING, new starts get 409 for up to 15 minutes); client IP comes from `X-Forwarded-For`, which can be spoofed, so the failed-login limit is a speed bump only; OpenAPI document is a Phase 8 deliverable.
 
-Decisions to discuss: app proxy (chosen by default) vs app-owned metafield read directly in Liquid; cache duration vs how fast the merchant sees changes.
+## Phase 6 — App proxy + Theme App Extension  [~]
+
+Code, automated tests and `shopify theme check` done. Live storefront checks pending (needs a working tunnel; enter the storefront password first if the dev store is protected).
+
+- [x] `[app_proxy]` in toml → `/apps/product-badge/...` → app `/proxy/...`; verified with `authenticate.public.appProxy`; config validates
+- [x] Response contains only `text`, `color`, `textColor` (never `internalNote`: the query does not even select it); `Cache-Control: public, max-age=60`; identical `{ "badge": null }` for every empty case
+- [x] `extensions/product-badge` generated with the CLI; block schema: show/hide, alignment, style (solid/outline), text size, corner radius, all with defaults; product templates only
+- [x] Escaped Liquid output, `textContent` insertion, colour re-checked in JS, namespaced CSS, deferred JS from the CDN, hidden until loaded, silent on error, theme-editor-only placeholder
+- [x] Badge always carries text (not colour alone); text colour chosen for ≥4.5:1 contrast; outline style uses the theme's text colour
+- [x] Rate limit on the storefront endpoint: 120/min per shop + IP, 429 + `Retry-After`
+- [x] Tests: contrast unit tests + 4 route tests with a real proxy signature (active, 9 empty cases incl. cross-shop, tampered/unsigned → 400, 429)
+
+Enhancement beyond the PDF (the PDF asks only for a block "suitable for a product template"): **badges on product cards**.
+- [x] Second app block **Product Card Badge**, added by the merchant inside the theme's Product card block. Horizon's `_product-card` accepts `@app` blocks and hands each card's product to its children as `closest.product`; the block's `product` setting (`autofill: true`) is connected to it. No theme file is edited and no theme selector is used
+- [x] Batch endpoint `/apps/product-badge/badges?ids=1,2,3` → `/proxy/badges`: at most 50 numeric ids, every id validated (else 400, not cached), one shop-scoped query, map keyed by Shopify product id holding only the products with a badge to show, same public fields, same 60s cache, same shared rate limit (one hit per request)
+- [x] One script for both blocks: collects every badge container, de-duplicates ids, one request per 50 products; reacts to theme-editor section reloads and to cards added later (filters, load more); optional reserved space so cards do not move
+- [x] Tests: 6 more route tests (several products, all unavailable kinds + cross-shop in both directions, uninstalled/unknown shop, malformed and oversized lists, tampered/unsigned, shared rate limit). The single-product endpoint tests are unchanged and still pass
+
+Verification checklist (dev store):
+- [ ] Theme editor → product template → Add block → Apps → **Product Badge** appears and can be added without editing theme code
+- [ ] Each setting changes the preview: show/hide, alignment, style, text size, corner radius
+- [ ] ACTIVE badge: product page shows the badge text in the chosen colour
+- [ ] INACTIVE badge (untick Active in the app): nothing renders on the storefront within ~60s
+- [ ] MISSING badge: another product shows nothing; theme editor shows the placeholder only
+- [ ] Browser network tab: `/apps/product-badge/products/<id>` returns only `text`, `color`, `textColor`
+- [ ] Edit the badge text in the app → storefront shows it after at most 60s (hard refresh)
+- [ ] Opening the app URL `/proxy/products/<id>` directly (no signature) returns 400
+- [ ] Product cards (Horizon): Customize → home page → Featured collection → Product card → Add block → Apps → **Product Card Badge**; the Product setting shows a connected dynamic source (if it is empty, connect it to the closest product with the dynamic-source icon). Repeat on the collection template
+- [ ] Home page and collection page: only products with an ACTIVE badge show one, each card shows its own product's badge, and the product-page badge still works
+- [ ] Network tab on a collection page: ONE `/apps/product-badge/badges?ids=...` request for the whole grid; body holds only `text`, `color`, `textColor` per id
+- [ ] Cards do not move when badges appear (Reserve space on); filtering or loading more products badges the new cards
+
+Known limits: one request per page view (one per 50 products, cached 60s); merchant edits take up to 60s to appear; rate limit is in memory, single process; themes must support `@app` blocks (Online Store 2.0), and for cards the theme's product card itself must accept `@app` blocks and pass its product down (Horizon does, Dawn-era themes do not, there the card block is not offered); the block shows nothing if JavaScript is disabled.
 
 ## Phase 7 — Remaining tests  [ ]
 
