@@ -19,7 +19,7 @@ The example database connection uses local demo credentials and port 3307. Docke
 
 `shopify.app.toml` currently belongs to the author's development app. For your own app, use `npm run config:link` to select your app, then verify `read_products` and the 2026-07 API version are retained. `npm run dev` supplies Shopify credentials/URLs and guides development-store selection. Open the preview in Shopify Admin; authenticate/install if prompted. A plain localhost page does not establish an embedded Shopify session.
 
-Click **Sync now** in the app to read Shopify's catalog into MySQL. Repeating it updates existing rows and preserves app-owned enrichments. **Reconcile** performs the same complete read with a distinct run label. See [learning notes](docs/LEARNING.md) and [Phase 2 verification](docs/PHASE_2_VERIFICATION.md).
+Click **Sync now** in the app to read Shopify's catalog into MySQL. Repeating it updates existing rows and preserves app-owned enrichments. **Reconcile** performs the same complete read with a distinct run label. See [learning notes](docs/LEARNING.md) and [Phase 2 verification](`docs/PHASES.md`).
 
 ## Verify Phase 2
 

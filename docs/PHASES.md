@@ -37,8 +37,8 @@ Verified state: `npm test` 23 passed · `npm run test:integration` 10 passed · 
 
 Fix now (small):
 - [x] **No git commits yet.** Everything is untracked. The PDF prefers clean commit history, and secrets must never enter history. Make a first commit per finished phase after checking `.env` is ignored.
-- [x] **`.env.example` vs docs mismatch.** `TEST_DATABASE_URL` uses `root:root`, while `PHASE_2_VERIFICATION.md` uses `app:app`. Pick one.
-- [ ] **Phase 2 live dev-store checklist is still unchecked** (`docs/PHASE_2_VERIFICATION.md`). It was blocked by an expired session. The PDF requires at least one real dev-store integration.
+- [x] **`.env.example` vs docs mismatch.** `TEST_DATABASE_URL` uses `root:root`, while the docs used `app:app`. Now `app:app` everywhere.
+- [ ] **Phase 2 live dev-store checklist is still unchecked** (see Phase 2 below). It was blocked by an expired session. The PDF requires at least one real dev-store integration.
 - [x] **Template leftover:** `app/routes/app.additional.tsx` is unused demo code. Remove.
 
 Fold into a later phase (not bugs today, but gaps against the PDF):
@@ -65,7 +65,18 @@ Fold into a later phase (not bugs today, but gaps against the PDF):
 - [x] Bounded retry/backoff, throttle handling, timeouts, redacted structured logs
 - [x] Reconcile button (same full sync, type `RECONCILE`)
 - [x] Unit + real-MySQL integration tests
-- [ ] Live dev-store checklist in `PHASE_2_VERIFICATION.md` (≥20 products, re-sync, rename, >25 variants, delete, reconcile)
+
+Live dev-store checklist (run `shopify app dev`, open the app in the dev store admin):
+- [ ] Shop identity and the Sync now button appear
+- [ ] With ≥20 test products, Sync now → SUCCEEDED, local product/variant counts match
+- [ ] Sync again unchanged → 0 inserted, same totals
+- [ ] Rename a product in Shopify, sync → local title updates, same local row id
+- [ ] Product with more than 25 variants → all variants copied
+- [ ] Delete a disposable product in Shopify, sync → local row soft-deleted
+- [ ] Reconcile completes and records type RECONCILE
+- [ ] Expired session recovers (re-auth), no error loop
+
+Known limits: sync runs inside the request (60s budget, no queue); a crashed run stays RUNNING until the 15-minute abandon rule; cursor checkpoints are diagnostic, re-runs start from page one; a changing catalog is not a snapshot.
 
 ## Phase 3 — Admin UI: search + enrichment editor  [x]
 

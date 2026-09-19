@@ -150,7 +150,7 @@ GraphQL logs include the local shop ID, sync run ID, operation, attempt, duratio
 - `npm run typecheck`, `npm run lint`, `npm run build`.
 - Shopify AI Toolkit schema validation accepted the three queries against `2026-07`, requiring only `read_products`.
 
-Integration tests require a separate local database ending in `_test`, apply migrations, and delete only fixture shops created by the test process. They never reset the development database. See `docs/PHASE_2_VERIFICATION.md` for commands and live-store evidence.
+Integration tests require a separate local database ending in `_test`, apply migrations, and delete only fixture shops created by the test process. They never reset the development database. See `docs/PHASES.md` for commands and live-store evidence.
 
 ### What is still outside this phase
 
