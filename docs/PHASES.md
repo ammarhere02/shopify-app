@@ -17,7 +17,7 @@ Legend: `[x]` done · `[~]` partly done · `[ ]` not started
 
 | # | Phase | PDF refs | Status | Time spent |
 |---|---|---|---|---|
-| 0 | Review fixes (issues found 2026-09-19) | — | [ ] | |
+| 0 | Review fixes (issues found 2026-09-19) | — | [~] live check pending | |
 | 1 | MySQL, schema, install lifecycle | F-01, F-02, §4.1 | [x] | |
 | 2 | GraphQL product sync | F-03, F-04, F-09, F-11, §4.2–4.3 | [~] live check pending | |
 | 3 | Admin UI: product search + enrichment editor | F-05 | [ ] | |
@@ -36,10 +36,10 @@ Stretch (only after all Musts): F-12 metafield mutation, API-key UI rotation, ET
 Verified state: `npm test` 23 passed · `npm run test:integration` 10 passed · typecheck, lint clean · MySQL container healthy.
 
 Fix now (small):
-- [ ] **No git commits yet.** Everything is untracked. The PDF prefers clean commit history, and secrets must never enter history. Make a first commit per finished phase after checking `.env` is ignored.
-- [ ] **`.env.example` vs docs mismatch.** `TEST_DATABASE_URL` uses `root:root`, while `PHASE_2_VERIFICATION.md` uses `app:app`. Pick one.
+- [x] **No git commits yet.** Everything is untracked. The PDF prefers clean commit history, and secrets must never enter history. Make a first commit per finished phase after checking `.env` is ignored.
+- [x] **`.env.example` vs docs mismatch.** `TEST_DATABASE_URL` uses `root:root`, while `PHASE_2_VERIFICATION.md` uses `app:app`. Pick one.
 - [ ] **Phase 2 live dev-store checklist is still unchecked** (`docs/PHASE_2_VERIFICATION.md`). It was blocked by an expired session. The PDF requires at least one real dev-store integration.
-- [ ] **Template leftover:** `app/routes/app.additional.tsx` is unused demo code. Remove.
+- [x] **Template leftover:** `app/routes/app.additional.tsx` is unused demo code. Remove.
 
 Fold into a later phase (not bugs today, but gaps against the PDF):
 - Webhook routes use `console.log`, not the structured logger (`app/lib/logger.server.ts`) → F-10. Fix in Phase 4.
