@@ -162,3 +162,28 @@ There is no cross-request snapshot of a catalog while the merchant edits it. We 
 
 - [Products query](https://shopify.dev/docs/api/admin-graphql/2026-07/queries/products)
 - [Product and its variants connection](https://shopify.dev/docs/api/admin-graphql/2026-07/objects/Product)
+
+---
+
+## Phase 3 — Product search and badge editor
+
+### What the merchant gets
+A **Products** page in the app: search the local catalog by title, filter by status or "has badge", open a product, and save or remove its badge and private note.
+
+### Files
+| File | Responsibility |
+|---|---|
+| `app/routes/app.products._index.tsx` | List page. The loader reads filters from the URL and returns one page of products |
+| `app/routes/app.products.$id.tsx` | Editor page. The loader shows the product; the action saves or removes the enrichment |
+| `app/services/enrichment-validation.ts` | The badge rules in one place. The Phase 5 API reuses it, so UI and API cannot disagree |
+| `app/repositories/enrichment.server.ts` | All database access, always filtered by `shopId` |
+
+### Decisions and why
+1. **Filters live in the URL** (`?query=red&status=ACTIVE`). The page can be reloaded or shared, and the loader stays a plain function of the request. Unknown filter values are ignored, never passed to the database.
+2. **No N+1.** `findMany` uses `include: { enrichment: true }`, so Prisma loads the badges for the whole page in one extra query instead of one query per row.
+3. **Keyset pagination.** We order by `id` and ask for rows with `id > lastSeenId`, fetching one extra row to learn whether a next page exists. `OFFSET 5000` makes MySQL read and throw away 5000 rows; `id > X` jumps there through the index. Rows also cannot repeat when the data changes between pages.
+4. **One enrichment per product is enforced twice.** The code uses an upsert on `productId`, and the database has `productId @unique`. A double click on Save updates the same row.
+5. **Tenant isolation.** The editor first looks the product up with `{ id, shopId }`. Shop B asking for Shop A's product id gets a 404, the same answer as for an id that does not exist, so ids do not leak.
+6. **Remove vs inactive.** "Remove badge" deletes the row and is idempotent. The **Active** checkbox hides a badge from the storefront while keeping its text and note.
+7. **Validation at the boundary, errors all at once.** The validator returns every field error together so the form can show them next to each field. Colours are stored uppercase so equal colours compare equal.
+8. **Soft-deleted products** are hidden from the list. Opening one directly shows a warning, and its enrichment is kept.

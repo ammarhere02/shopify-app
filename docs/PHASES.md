@@ -20,7 +20,7 @@ Legend: `[x]` done · `[~]` partly done · `[ ]` not started
 | 0 | Review fixes (issues found 2026-09-19) | — | [~] live check pending | |
 | 1 | MySQL, schema, install lifecycle | F-01, F-02, §4.1 | [x] | |
 | 2 | GraphQL product sync | F-03, F-04, F-09, F-11, §4.2–4.3 | [~] live check pending | |
-| 3 | Admin UI: product search + enrichment editor | F-05 | [ ] | |
+| 3 | Admin UI: product search + enrichment editor | F-05 | [x] manual check pending | |
 | 4 | Product webhooks + receipts | F-08, §4.4 | [ ] | |
 | 5 | Developer API `/api/v1` + API keys | F-06, §4.5 | [ ] | |
 | 6 | App proxy + Theme App Extension | F-07, §4.6 | [ ] | |
@@ -67,17 +67,17 @@ Fold into a later phase (not bugs today, but gaps against the PDF):
 - [x] Unit + real-MySQL integration tests
 - [ ] Live dev-store checklist in `PHASE_2_VERIFICATION.md` (≥20 products, re-sync, rename, >25 variants, delete, reconcile)
 
-## Phase 3 — Admin UI: search + enrichment editor  [ ]
+## Phase 3 — Admin UI: search + enrichment editor  [x]
 
-Goal: merchant searches local products and creates/updates/removes a badge + internal note.
-- [ ] Product list with search (title), status filter, hasBadge filter, cursor/limit pagination, no N+1
-- [ ] Enrichment form: badge text (≤40), colour `#RRGGBB`, active flag, internal note
-- [ ] Shared validation module (reused by the Phase 5 API)
-- [ ] Enrichment repository/service scoped by `shop.id`
-- [ ] Labels and keyboard-usable controls (accessibility)
-- [ ] Unit tests for badge validation
+- [x] Product list (`/app/products`): title search, status filter, hasBadge filter, keyset pagination, enrichment loaded in the same query (no N+1)
+- [x] Editor (`/app/products/:id`): badge text (≤40), colour `#RRGGBB`, active flag, internal note, remove
+- [x] Shared validation module `app/services/enrichment-validation.ts` (reused by the Phase 5 API)
+- [x] Repository `app/repositories/enrichment.server.ts`, every query scoped by `shop.id`
+- [x] Labelled, keyboard-usable Polaris controls
+- [x] Unit tests (validation) + real-MySQL tests (one-per-product, tenant isolation, filters, pagination)
+- [ ] Manual check in the dev store admin
 
-Decisions to discuss: one page vs list + detail route; offset vs cursor pagination; delete row vs `active = false`; what to show for soft-deleted products.
+Decisions: list + detail routes; keyset pagination on local id; "remove" deletes the row while `active = false` hides it; soft-deleted products are hidden from the list.
 
 ## Phase 4 — Product webhooks  [ ]
 
