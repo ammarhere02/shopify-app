@@ -1,13 +1,51 @@
-# docs/ — engineering notes
+# Documentation
 
-| File | Read it for |
+| Document | Contents |
 |---|---|
-| `DESIGN.md` | Why each part is built the way it is: the decision, the alternatives considered and the known limits, one section per part of the app. This is the source for the architecture discussion and the reviewer questions in the assignment |
-| `VERIFICATION.md` | What is implemented against the assignment's requirement ids, the automated test counts, and the live development-store checklists with the evidence collected so far |
-| `SUBMISSION.md` | The submission document: architecture note with diagram and the four flows, database documentation with ER diagram and constraints, `/api/v1` endpoint reference with Postman captures, and test evidence (command results, what is mocked and what is real, manual dev-store checks) |
-| `diagrams/` | `architecture.png` and `er-diagram.png`, embedded in `SUBMISSION.md`. The Mermaid source sits next to each image in that file |
-| `postman/` | Six Postman captures of the developer API against the real development store, embedded in `SUBMISSION.md`. The Bearer token is masked in every capture; keep it that way when adding more |
+| [SUBMISSION.md](SUBMISSION.md) | Architecture note, database documentation, `/api/v1` endpoint reference, test evidence |
+| [DESIGN.md](DESIGN.md) | Design decisions, alternatives considered and known limits, by area of the application |
+| [VERIFICATION.md](VERIFICATION.md) | Implementation status against the assignment requirements, automated test results, development-store checklists |
 
-How each folder works today is in that folder's `README.md`, not here.
+Folder-level documentation is in each folder's `README.md`.
 
-Still to write for submission: OpenAPI file for `/api/v1`, demo, time spent.
+## Architecture
+
+![Architecture diagram: Shopify platform, application routes, services and repositories, and the MySQL tables](diagrams/architecture.png)
+
+Trust boundaries, data ownership and the request flows are described in [SUBMISSION.md, section 1](SUBMISSION.md#1-architecture-note).
+
+## Database
+
+![ER diagram: a shop owns products, sync runs, webhook receipts and API keys; a product has variants and at most one enrichment](diagrams/er-diagram.png)
+
+Tables, constraints, indexes and deletion rules are described in [SUBMISSION.md, section 2](SUBMISSION.md#2-database-documentation).
+
+## Developer API evidence
+
+Captured on 2026-09-20 in Postman against the development store, authenticated with a Bearer API key (masked). The six requests form one round trip on a single product: read, create an enrichment, read it back, delete it, read again. The endpoint reference is in [SUBMISSION.md, section 3](SUBMISSION.md#3-api-documentation).
+
+**1. `GET /api/v1/products` — 200 OK**
+
+![Postman: GET /api/v1/products returns 200 with the synchronized products](postman/01-get-products.png)
+
+**2. `GET /api/v1/products/{productId}` — 200 OK**, product with variants, no enrichment
+
+![Postman: GET one product returns 200 with variants and enrichment null](postman/02-get-product.png)
+
+**3. `PUT /api/v1/products/{productId}/enrichment` — 201 Created**
+
+![Postman: PUT enrichment returns 201 Created](postman/03-put-enrichment-201.png)
+
+**4. `GET /api/v1/products/{productId}` — 200 OK**, enrichment present
+
+![Postman: GET product returns 200 with the new enrichment](postman/04-get-product-with-enrichment.png)
+
+**5. `DELETE /api/v1/products/{productId}/enrichment` — 204 No Content**
+
+![Postman: DELETE enrichment returns 204 No Content](postman/05-delete-enrichment-204.png)
+
+**6. `GET /api/v1/products/{productId}` — 200 OK**, enrichment removed
+
+![Postman: GET product after delete returns 200 with enrichment null](postman/06-get-product-after-delete.png)
+
+The sync endpoints and the error responses (401, 404, 409, 422, 429) are covered by the automated request tests listed in [SUBMISSION.md, section 4](SUBMISSION.md#4-test-evidence).
