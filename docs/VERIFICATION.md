@@ -12,11 +12,11 @@ Legend: `[x]` verified · `[ ]` not verified yet
 | Catalog sync (Admin GraphQL → MySQL) | F-03, F-04, F-09, F-11, §4.2–4.3 | yes | yes | open |
 | Admin UI: product search and enrichment editor | F-05 | yes | yes | open |
 | Webhooks and receipts | F-08, §4.4 | yes | yes | partly done |
-| Developer API `/api/v1` and API keys | F-06, §4.5 | yes | yes | open |
+| Developer API `/api/v1` and API keys | F-06, §4.5 | yes | yes | partly done |
 | Storefront badge: app proxy and Theme App Extension | F-07, §4.6 | yes | yes | open |
 | Structured logs with correlation ids, no secrets | F-10 | yes | yes (log content asserted) | open |
 
-Not built: F-12 (metafield mutation, stretch), an admin page for API keys, ETag on the storefront endpoint. Submission documents still to write: architecture note, ER diagram, OpenAPI file, demo.
+Not built: F-12 (metafield mutation, stretch), an admin page for API keys, ETag on the storefront endpoint. The architecture note, ER diagram, endpoint reference and test evidence are in [SUBMISSION.md](SUBMISSION.md). Submission documents still to write: OpenAPI file, demo.
 
 Automated checks, all passing: `npm test` (57), `npm run test:integration` (64, real MySQL), `npm run typecheck`, `npm run lint`, `npm run build`, `npx shopify theme check --path extensions/product-badge`. Shopify is mocked in automated tests; request signatures (webhook HMAC, app proxy) are real.
 
@@ -106,10 +106,11 @@ Known limits: synchronous processing, no queue or replay of our own; after Shopi
 - [x] Rate limits: 60/min per key, 5/min per key for sync starts, 20 failed logins/min per IP; `Retry-After`
 - [x] Tests: 5 unit and 21 request tests on real MySQL (auth failure, tenant scoping, valid write, invalid payload, missing product, rate limit, sync)
 
-Manual check:
-- [ ] `npm run api-key -- create <shop-domain> "demo"` prints a key once
-- [ ] `curl -H "Authorization: Bearer <key>" <app-url>/api/v1/products` → 200 with synced products
-- [ ] PUT a badge with curl → it appears in the admin Products page
+Manual check. Evidence: six Postman captures against the development store on 2026-09-20, in [SUBMISSION.md](SUBMISSION.md#postman-screenshots).
+- [x] `npm run api-key -- create <shop-domain> "demo"` produces a working key (used as the Bearer token in the captures)
+- [x] `GET <app-url>/api/v1/products` with `Authorization: Bearer <key>` → 200 with synced products; `GET /api/v1/products/{id}` → 200 with variants
+- [x] `PUT` a badge → 201 and the next `GET` returns it; `DELETE` → 204 and the next `GET` returns `"enrichment": null`
+- [ ] A badge written through the API appears in the admin Products page
 - [ ] No key or an invalid key → 401 envelope
 - [ ] `POST /api/v1/syncs` → 202, then `GET` the `Location` until `SUCCEEDED`
 - [ ] Revoke the key → 401
