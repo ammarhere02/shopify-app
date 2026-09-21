@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "f6ae88cf8f10a7e8c934d26e6ef7d508"
-application_url = "https://example.com"
+application_url = "https://enrichment-hub.onrender.com"
 embedded = true
 name = "portfolio-app"
 
@@ -30,12 +30,12 @@ api_version = "2026-07"
 
 # Storefront bridge: https://<shop>/apps/product-badge/<rest> -> <app url>/proxy/<rest>, signed by Shopify.
 [app_proxy]
-url = "https://example.com/proxy"
+url = "https://enrichment-hub.onrender.com/proxy"
 subpath = "product-badge"
 prefix = "apps"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://enrichment-hub.onrender.com/auth/callback" ]
 
 [build]
 include_config_on_deploy = true
