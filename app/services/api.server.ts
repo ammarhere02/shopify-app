@@ -9,12 +9,15 @@ const MAX_BODY_BYTES = 10_000;
 // Per authenticated key (keyed by DB id, so random tokens cannot grow the map).
 const keyLimiter = createRateLimiter({ limit: 60, windowMs: 60_000 });
 const syncLimiter = createRateLimiter({ limit: 5, windowMs: 60_000 });
+// Starting a generation is billable work; the per-shop daily and concurrency limits live in MySQL.
+const generationLimiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
 // Per client IP, counts only FAILED logins. A speed bump: the 256-bit key is the real defence.
 const failedAuthLimiter = createRateLimiter({ limit: 20, windowMs: 60_000 });
 
 export function resetRateLimitsForTests() {
   keyLimiter.reset();
   syncLimiter.reset();
+  generationLimiter.reset();
   failedAuthLimiter.reset();
 }
 
@@ -58,7 +61,7 @@ export type ApiContext = { shop: Shop; requestId: string; request: Request };
  */
 export async function withApiAuth(
   request: Request,
-  options: { methods: string[]; bucket?: "default" | "sync" },
+  options: { methods: string[]; bucket?: "default" | "sync" | "generation" },
   handler: (ctx: ApiContext) => Promise<Response>,
 ): Promise<Response> {
   const requestId = randomUUID();
@@ -84,7 +87,8 @@ export async function withApiAuth(
     log.shopId = auth.shop.id;
     log.keyId = auth.key.id;
 
-    const limiter = options.bucket === "sync" ? syncLimiter : keyLimiter;
+    const limiter =
+      options.bucket === "sync" ? syncLimiter : options.bucket === "generation" ? generationLimiter : keyLimiter;
     const hit = limiter.hit(String(auth.key.id));
     if (!hit.allowed) throw tooMany(hit.retryAfterSec);
 

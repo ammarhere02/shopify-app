@@ -291,6 +291,11 @@ Rate limits: 60 requests/min per key, 5 sync starts/min per key, 20 failed login
 | DELETE | `/api/v1/products/{productId}/enrichment` | Remove the enrichment (idempotent) | 204 | 401, 404 |
 | POST | `/api/v1/syncs` | Start a catalog sync in the background | 202 + `Location` | 400, 401, 409, 429 |
 | GET | `/api/v1/syncs/{id}` | Progress and result of a sync run | 200 | 400, 401, 404 |
+| GET | `/api/v1/products/{productId}/images` | Shopify images a description generation may use | 200 | 401, 404, 409 |
+| POST | `/api/v1/products/{productId}/description-generations` | Start an AI description generation in the background | 202 + `Location` (new) / 200 (same `Idempotency-Key`) | 400, 401, 404, 409, 413, 422, 429, 503 |
+| GET | `/api/v1/products/{productId}/description-generations` | The product's generations, newest first (max 20) | 200 | 401, 404 |
+| GET | `/api/v1/description-generations/{jobId}` | Status, draft, warnings, usage and error of one generation | 200 | 401, 404 |
+| POST | `/api/v1/description-generations/{jobId}/regenerate` | New generation linked to a previous one | 202 + `Location` / 200 | 401, 404, 409, 422, 429, 503 |
 
 #### GET /api/v1/products
 
@@ -401,6 +406,66 @@ curl -H "Authorization: Bearer $KEY" "$APP_URL/api/v1/syncs/12"
 Body: none. Success **200**: the same shape as above, ending with `"status": "SUCCEEDED"` (or `FAILED` with `error` set) and `completedAt` filled in.
 
 Common errors: **404** `sync_not_found`; **400** `invalid_sync_id` when the id is not a positive integer; **401**.
+
+#### POST /api/v1/products/{productId}/description-generations
+
+Purpose: ask a vision model for a product description. The call only creates a job; nothing is written to Shopify. Images are chosen by Shopify media id from `GET .../images`; an image URL is never accepted. `Idempotency-Key` (8-64 characters of `A-Z a-z 0-9 _ -`) is required: repeating a request with the same key returns the first job with **200** and makes no second model call.
+
+```bash
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: 4f0c2a9e-6f1d-4a57-9d55-2f6d6c1f0b11" \
+  -d '{"mediaIds":["gid://shopify/MediaImage/34567890123"],"merchantContext":"For beginner skiers. Friendly tone.","model":null}' \
+  "$APP_URL/api/v1/products/8123456789/description-generations"
+```
+
+Body: `mediaIds` (1-4 distinct `gid://shopify/MediaImage/<n>`, each a READY image of this product), `merchantContext` (optional, at most 2,000 characters), `model` (optional, must be in the server's allowlist). Success **202** with `Location: /api/v1/description-generations/{jobId}`:
+
+```json
+{ "data": { "id": 42, "status": "QUEUED", "reviewStatus": null, "previousGenerationId": null,
+  "provider": "openrouter", "model": "nex-agi/nex-n2.5-mini:free", "promptVersion": "v1",
+  "inputHash": "9f23...5f92",
+  "input": { "mediaIds": ["gid://shopify/MediaImage/34567890123"], "merchantContext": "For beginner skiers. Friendly tone.", "imageCount": 1 },
+  "draftHtml": null, "generated": null, "warnings": [], "usage": null, "error": null,
+  "createdAt": "2026-09-21T16:48:48.468Z", "startedAt": null, "completedAt": null, "reviewedAt": null } }
+```
+
+Common errors: **422** `validation_failed` with `details` per field (`mediaIds`, `merchantContext`, `model`, `idempotencyKey`); **404** `product_not_found` (also for another shop's product); **429** `generation_limit_reached` (one running generation per shop, daily limit) or `rate_limited` (10 starts per minute per key); **409** `shop_session_unavailable`; **503** `ai_not_configured`; **413**; **401**.
+
+#### GET /api/v1/description-generations/{jobId}
+
+Purpose: poll a generation. The job is looked up with the key's shop id, so another shop's job id is a 404. The raw model answer and the product snapshot are never returned.
+
+```bash
+curl -H "Authorization: Bearer $KEY" "$APP_URL/api/v1/description-generations/42"
+```
+
+Success **200**, finished job:
+
+```json
+{ "data": { "id": 42, "status": "SUCCEEDED", "reviewStatus": "DRAFT", "...": "as above",
+  "draftHtml": "<p>A warm beanie for cold days.</p><ul><li>Soft lining</li></ul>",
+  "generated": { "descriptionHtml": "<p>A warm beanie for cold days.</p><ul><li>Soft lining</li></ul>",
+    "shortDescription": "A warm beanie.", "seoTitle": "Blue Beanie", "seoDescription": "A warm blue beanie.",
+    "highlights": ["Soft lining"], "warnings": [] },
+  "warnings": ["Unverified performance claim: \"waterproof\""],
+  "usage": { "promptTokens": 812, "completionTokens": 240, "estimatedCostUsd": 0, "latencyMs": 6400, "generationId": "gen-..." },
+  "error": null } }
+```
+
+`status` is `QUEUED`, `RUNNING`, `SUCCEEDED` or `FAILED`. A failed job has `error` such as `INVALID_OUTPUT: Model output is not valid JSON. Model said: ...` or `RATE_LIMITED: OpenRouter returned 429`, and `draftHtml`, `generated` and `usage` are null. `draftHtml` is the merchant's working copy; `generated` stays as the model wrote it (after sanitizing).
+
+Common errors: **404** `not_found`; **401**.
+
+#### POST /api/v1/description-generations/{jobId}/regenerate
+
+Purpose: try again without losing history. Always creates a NEW job whose `previousGenerationId` is `{jobId}`; the earlier job, its output and its usage are unchanged. The body is optional and overrides the previous attempt's `mediaIds`, `merchantContext` or `model`. `Idempotency-Key` is required.
+
+```bash
+curl -X POST -H "Authorization: Bearer $KEY" -H "Idempotency-Key: 0b7c1d52-91aa-4c1e-8d0a-6a2a3e1c9f00" \
+  "$APP_URL/api/v1/description-generations/42/regenerate"
+```
+
+Success **202** (or **200** for a repeated key) with the new job. Common errors: **409** `invalid_state` while `{jobId}` is still running; **404**; **422**; **429**; **401**.
 
 ### Postman screenshots
 

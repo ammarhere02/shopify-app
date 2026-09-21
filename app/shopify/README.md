@@ -5,7 +5,7 @@ Everything that talks to Shopify's Admin GraphQL API: the query documents and on
 
 | File | Contents |
 |---|---|
-| `queries.ts` | `SHOP_QUERY` (ShopIdentity), `PRODUCTS_PAGE_QUERY` (ProductsPage, sorted by ID), `PRODUCT_VARIANTS_QUERY` (ProductVariantsPage), `PRODUCT_BY_ID_QUERY` (ProductById, webhook re-fetch; `product` is null when it no longer exists). The page query and ProductById share one `PRODUCT_FIELDS` list so both store the same shape. Sizes: 25 products × 25 variants per page, extra variant pages of 100. Estimated cost 2 + 25 × 28 = 702, under Shopify's 1000 limit. Change sizes only after recomputing this |
+| `queries.ts` | `SHOP_QUERY` (ShopIdentity), `PRODUCTS_PAGE_QUERY` (ProductsPage, sorted by ID), `PRODUCT_VARIANTS_QUERY` (ProductVariantsPage), `PRODUCT_BY_ID_QUERY` (ProductById, webhook re-fetch; `product` is null when it no longer exists), `PRODUCT_FOR_DESCRIPTION_QUERY` (ProductForDescription: trusted fields, current `descriptionHtml`, `updatedAt`, first 20 media with `MediaImage.image.url` capped at 1024px; read live for a description generation because the local projection stores neither the description nor media; validated against 2026-07). The page query and ProductById share one `PRODUCT_FIELDS` list so both store the same shape. Sizes: 25 products × 25 variants per page, extra variant pages of 100. Estimated cost 2 + 25 × 28 = 702, under Shopify's 1000 limit. Change sizes only after recomputing this |
 | `graphql-client.server.ts` | `createShopifyClient(admin.graphql, options)` → `{ query(operationName, document, variables?, expectedCost?) }`. Also `classifyError`, `msUntilAvailable`, `ShopifyApiError` |
 
 ## Client behaviour

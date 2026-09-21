@@ -46,10 +46,13 @@ model Shop {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  products       Product[]
-  syncRuns       SyncRun[]
-  webhookReceipts WebhookReceipt[]
-  apiKeys        DeveloperApiKey[]
+  products            Product[]
+  syncRuns            SyncRun[]
+  webhookReceipts     WebhookReceipt[]
+  apiKeys             DeveloperApiKey[]
+  generationJobs      AiGenerationJob[]
+  descriptionVersions ProductDescriptionVersion[]
+  publicationActions  PublicationAction[]
 
   @@map("shops")
 }
@@ -68,9 +71,12 @@ model Product {
   syncedAt          DateTime
   deletedAt         DateTime? // soft delete: product gone from Shopify, enrichment kept
 
-  shop       Shop               @relation(fields: [shopId], references: [id], onDelete: Cascade)
-  variants   Variant[]
-  enrichment ProductEnrichment?
+  shop                Shop                        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  variants            Variant[]
+  enrichment          ProductEnrichment?
+  generationJobs      AiGenerationJob[]
+  descriptionVersions ProductDescriptionVersion[]
+  publicationActions  PublicationAction[]
 
   @@unique([shopId, shopifyProductGid]) // makes re-sync idempotent
   @@index([shopId, title])
@@ -178,4 +184,143 @@ model DeveloperApiKey {
 
   @@index([shopId])
   @@map("developer_api_keys")
+}
+
+// Did the machine finish? Moved only by the generation service.
+enum GenerationStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+// What did the merchant decide? Null until the job has SUCCEEDED.
+enum ReviewStatus {
+  DRAFT
+  APPROVED
+  REJECTED
+  APPLIED
+}
+
+// One attempt to generate a description. The only mutable row of a generation:
+// it carries both state fields and the merchant's working copy.
+model AiGenerationJob {
+  id             Int              @id @default(autoincrement())
+  shopId         Int
+  productId      Int
+  status         GenerationStatus @default(QUEUED)
+  reviewStatus   ReviewStatus?
+  draftHtml      String?          @db.Text // merchant's edited copy, always sanitized; model output stays in outputs
+  idempotencyKey String           @db.VarChar(64) // client-generated; a retried click returns the same job
+  previousJobId  Int? // regenerate links attempts, history is never overwritten
+  provider       String           @db.VarChar(50)
+  model          String           @db.VarChar(100)
+  promptVersion  String           @db.VarChar(20)
+  inputHash      String           @db.Char(64) // sha256 of the normalized input
+  error          String?          @db.Text
+  createdAt      DateTime         @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  reviewedAt     DateTime?
+
+  shop        Shop                        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product     Product                     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  previousJob AiGenerationJob?            @relation("Regeneration", fields: [previousJobId], references: [id], onDelete: SetNull)
+  nextJobs    AiGenerationJob[]           @relation("Regeneration")
+  input       AiGenerationInput?
+  output      AiGenerationOutput?
+  versions    ProductDescriptionVersion[]
+
+  @@unique([shopId, idempotencyKey]) // idempotency boundary for billable work
+  @@index([shopId, status]) // per-shop concurrency limit
+  @@index([shopId, createdAt]) // daily limit
+  @@index([productId, createdAt]) // history on the product page
+  @@map("ai_generation_jobs")
+}
+
+// Exactly what was supplied. Written once with the job, never updated. No image binaries.
+model AiGenerationInput {
+  id                  Int     @id @default(autoincrement())
+  jobId               Int     @unique
+  selectedMediaIds    Json // Shopify media GIDs chosen by the merchant
+  productSnapshotJson Json // trusted Shopify fields at generation time, incl. description hash + updatedAt
+  merchantContext     String? @db.Text
+  imageCount          Int
+
+  job AiGenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("ai_generation_inputs")
+}
+
+// What the model returned. Written once when the provider answered, never updated.
+model AiGenerationOutput {
+  id               Int      @id @default(autoincrement())
+  jobId            Int      @unique
+  rawJson          Json // as returned, before validation
+  validatedJson    Json // after schema validation and HTML sanitizing
+  warningsJson     Json
+  promptTokens     Int?
+  completionTokens Int?
+  cost             Decimal? @db.Decimal(10, 6) // USD; one generation is a fraction of a cent
+  generationId     String?  @db.VarChar(100) // OpenRouter generation id
+  latencyMs        Int
+
+  job AiGenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("ai_generation_outputs")
+}
+
+enum DescriptionSource {
+  AI
+  RESTORE
+}
+
+// Append-only history of descriptions this app wrote to Shopify.
+model ProductDescriptionVersion {
+  id                      Int               @id @default(autoincrement())
+  shopId                  Int
+  productId               Int
+  jobId                   Int?
+  source                  DescriptionSource
+  descriptionHtml         String            @db.Text // what was written
+  previousDescriptionHtml String?           @db.Text // what it replaced (rollback evidence)
+  shopifyUpdatedAt        DateTime // Shopify's updatedAt after the write
+  appliedAt               DateTime          @default(now())
+  appliedBy               String            @db.VarChar(255) // staff email/id or "api-key:<prefix>"
+  restoredFromId          Int?
+
+  shop         Shop                        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product      Product                     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  job          AiGenerationJob?            @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  restoredFrom ProductDescriptionVersion?  @relation("Restore", fields: [restoredFromId], references: [id], onDelete: SetNull)
+  restores     ProductDescriptionVersion[] @relation("Restore")
+
+  @@index([shopId, productId, appliedAt])
+  @@map("product_description_versions")
+}
+
+enum PublicationActionStatus {
+  REQUESTED
+  SUCCEEDED
+  FAILED
+}
+
+// Audit of explicit publish operations.
+model PublicationAction {
+  id             Int                     @id @default(autoincrement())
+  shopId         Int
+  productId      Int
+  publicationGid String                  @db.VarChar(100)
+  action         String                  @db.VarChar(20) // PUBLISH
+  status         PublicationActionStatus @default(REQUESTED)
+  userErrorsJson Json?
+  requestedBy    String                  @db.VarChar(255)
+  requestedAt    DateTime                @default(now())
+  completedAt    DateTime?
+
+  shop    Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, productId, requestedAt])
+  @@map("publication_actions")
 }

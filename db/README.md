@@ -8,6 +8,11 @@ Ownership rule: Shopify owns catalog fields (title, status, price…), so `produ
 ```
 shops 1--* products 1--* variants
   |            \--0..1 product_enrichments
+  |            |--* ai_generation_jobs 1--0..1 ai_generation_inputs
+  |            |        |                \--0..1 ai_generation_outputs
+  |            |        \--* (previousJobId → ai_generation_jobs: regenerations)
+  |            |--* product_description_versions  (jobId optional; restoredFromId → itself)
+  |            \--* publication_actions
   |--* sync_runs
   |--* developer_api_keys
   \--* webhook_receipts   (shop optional: a delivery can arrive for an unknown shop)
@@ -29,6 +34,13 @@ Models use PascalCase in code and snake_case tables via `@@map`.
 | `WebhookReceipt` → `webhook_receipts` | `webhookId` unique for dedupe; status RECEIVED/PROCESSED/FAILED | `repositories/webhook-receipt.server.ts`, one row per delivery for all four topics. `error` also holds skip notes on `PROCESSED` rows |
 | `SyncRun` → `sync_runs` | type FULL/RECONCILE; status RUNNING/SUCCEEDED/FAILED; counters; `cursor` | `services/sync.server.ts` |
 | `DeveloperApiKey` → `developer_api_keys` | `keyHash` = SHA-256 hex, unique; plaintext never stored | `repositories/api-key.server.ts` via `npm run api-key` (create/revoke) and the API auth (`lastUsedAt`) |
+| `AiGenerationJob` → `ai_generation_jobs` | unique `(shopId, idempotencyKey)` = idempotency boundary for billable work; indexes `(shopId, status)`, `(shopId, createdAt)`, `(productId, createdAt)`; `status` QUEUED/RUNNING/SUCCEEDED/FAILED; `reviewStatus` DRAFT/APPROVED/REJECTED/APPLIED, null until SUCCEEDED; `draftHtml` = merchant's sanitized working copy; `inputHash` SHA-256 hex; `previousJobId` links regenerations. The only mutable row of a generation | `repositories/ai-generation.server.ts` |
+| `AiGenerationInput` → `ai_generation_inputs` | `jobId` unique (1-to-1). Media GIDs, product snapshot JSON, merchant context, image count. No image binaries. Written once with the job | same, inside `createJob` |
+| `AiGenerationOutput` → `ai_generation_outputs` | `jobId` unique (1-to-1), exists only for SUCCEEDED jobs. `rawJson` (as returned), `validatedJson` (validated + sanitized), warnings, tokens, `cost Decimal(10,6)` USD, OpenRouter `generationId`, `latencyMs`. Written once, never updated | same, inside `completeJob` |
+| `ProductDescriptionVersion` → `product_description_versions` | index `(shopId, productId, appliedAt)`; `source` AI/RESTORE; keeps what was written AND what it replaced; `restoredFromId` self-reference. Append-only | `repositories/description-version.server.ts` (no update or delete exists) |
+| `PublicationAction` → `publication_actions` | index `(shopId, productId, requestedAt)`; status REQUESTED/SUCCEEDED/FAILED; `userErrorsJson` | `repositories/publication-action.server.ts` |
+
+The generation tables carry `shopId` directly (jobs, versions, publication actions) so every query filters by shop without a join. Inputs and outputs are reached only through a job that was already found by `shopId`. Products are soft-deleted, so generation history survives a Shopify delete.
 
 ## Changing the schema
 1. Edit `schema.prisma`.

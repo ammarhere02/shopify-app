@@ -1,7 +1,7 @@
 # app/repositories/ — Prisma queries, always scoped by shop
 
 ## What this folder is
-The only place that runs Prisma queries for products, enrichments, webhook receipts and API keys. Keeping the queries here makes tenant isolation checkable in one folder: every product and enrichment function takes `shopId` as its first argument and filters by it, so a caller cannot reach another shop's rows by changing an id.
+The only place that runs Prisma queries for products, enrichments, webhook receipts, API keys and description generations. Keeping the queries here makes tenant isolation checkable in one folder: every product and enrichment function takes `shopId` as its first argument and filters by it, so a caller cannot reach another shop's rows by changing an id.
 
 | File | Function | Behaviour |
 |---|---|---|
@@ -19,8 +19,19 @@ The only place that runs Prisma queries for products, enrichments, webhook recei
 | | `getPublicBadges(shopId, gids[])` | STOREFRONT read for grids: one `findMany` with `shopId` + `IN`, same filters (ACTIVE, not deleted, enrichment active) and the same public-only `select`. Returns only qualifying products, as `{ shopifyProductGid, badgeText, badgeColor }` |
 | | `saveEnrichment(shopId, productId, input)` | Upsert on unique `productId`. Returns `{ enrichment, created }` or null if product not in shop |
 | | `removeEnrichment(shopId, productId)` | Deletes the row, idempotent. Returns false if product not in shop |
+| `ai-generation.server.ts` | `createJob(shopId, input, client?)` | Job + input in one create. Unique `(shopId, idempotencyKey)`: on P2002 returns the existing job with `created: false`, so a retried request is never a second billable call. Null when the product (live, same shop) or `previousJobId` (same shop and product) is not found |
+| | `findJobByIdempotencyKey(shopId, key, client?)` | The job a retried request gets back |
+| | `getJob(shopId, jobId)`, `listJobsForProduct(shopId, productId, limit)` | Shop-scoped reads. `getJob` includes input and output |
+| | `countActiveJobs(shopId)`, `countJobsSince(shopId, since)` | Spend limits counted from rows, so they survive restarts. `createJob`, the counters and `failAbandonedJobs` accept a transaction client, so the service can run them under one lock on the shop row |
+| | `markJobRunning`, `completeJob`, `failJob`, `failAbandonedJobs(shopId, now?)` | Conditional `updateMany` on the expected `status`, so one concurrent caller wins. `completeJob` sets SUCCEEDED + `reviewStatus` DRAFT + first `draftHtml` and inserts the output row in one transaction. `failJob` bounds the error to 1000 chars. Abandoned = RUNNING/QUEUED older than `JOB_ABANDON_MS` (5 min) |
+| | `saveDraft(shopId, jobId, html)` | Only while SUCCEEDED + DRAFT. Never touches `ai_generation_outputs` |
+| | `moveReviewStatus(client, shopId, jobId, from, to)` | Checks `canMoveReview`, then updates `WHERE reviewStatus = from`. Accepts a transaction client so Apply can commit the move together with the version row |
+| `description-version.server.ts` | `createVersion(client, shopId, input)`, `listVersions(shopId, productId)`, `getVersion(shopId, productId, versionId)` | Append-only: no update or delete. A restore is a new row with `restoredFromId` |
+| `publication-action.server.ts` | `createPublicationAction`, `completePublicationAction(shopId, id, result)`, `listPublicationActions` | Row is written before the Shopify call; completion happens once (`WHERE status = REQUESTED`) and keeps Shopify's `userErrors` |
 
 ## Rules
+- `ai_generation_outputs` is write-once. The merchant's edits go to `ai_generation_jobs.draftHtml`; the model's words stay as audit evidence.
+- State changes are conditional updates on the expected current state, never read-then-write.
 - Every product/enrichment function takes `shopId` first and filters by it. Do not add a query without it.
 - `webhook_receipts.webhookId` (unique) is the idempotency boundary for webhooks. Receipts are keyed by `webhookId`, not by shop, because the id is globally unique and the shop may be unknown.
 - `internalNote` is private. Anything serving the storefront must select only `badgeText`, `badgeColor`, `active`.

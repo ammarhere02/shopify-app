@@ -20,6 +20,8 @@ Merchant Product Enrichment Hub. What is built and verified: `docs/VERIFICATION.
 | `services/` | Business logic: tenant guard, sync, mapping, validation, webhook pipeline, developer API pipeline + API keys, storefront badge. See `services/README.md` |
 | `repositories/` | The only place with product/enrichment Prisma queries, always scoped by `shopId`. See `repositories/README.md` |
 | `shopify/` | Admin GraphQL queries and the retrying client. See `shopify/README.md` |
+| `components/` | React components shared by pages. See `components/README.md` |
+| `ai/` | OpenRouter configuration and the provider client contract. See `ai/README.md` |
 | `lib/logger.server.ts` | JSON logger `logger.info|warn|error(event, fields)`. Redacts top-level keys matching token/secret/authorization/password/api key/cookie. Use it instead of `console.log` |
 | `lib/rate-limit.server.ts` | `createRateLimiter({ limit, windowMs })` → `hit(key)`, `blocked(key)`. In-memory fixed window, one process only |
 | `lib/badge-contrast.ts` | `readableTextColor(hex)` → black or white text with at least 4.5:1 contrast. Pure |

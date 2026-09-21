@@ -8,6 +8,7 @@ One section per part of the app: **what** was built, **why**, and the **alternat
 4. [Product webhooks](#4-product-webhooks-and-idempotent-receipts)
 5. [Developer API](#5-developer-api-apiv1-and-api-keys)
 6. [Storefront badge](#6-app-proxy-and-the-product-badge-theme-block)
+7. [AI product description generator](#7-ai-product-description-generator) (design, implementation in progress)
 
 ---
 
@@ -310,3 +311,113 @@ The PDF asks for a block "suitable for a product template". Showing the badge in
 - In-memory rate limit, single process.
 - Needs an Online Store 2.0 theme whose product section accepts `@app` blocks.
 - With JavaScript disabled the block stays hidden.
+
+---
+
+## 7. AI product description generator
+
+Status: design. This section fixes the decisions before the code is written; file paths are the planned ones.
+
+### What the merchant gets
+On a synchronized product the merchant picks one to four of the product's Shopify images, adds optional facts (audience, tone, material, keywords), and asks for a description. A vision model, reached through OpenRouter, returns a structured proposal. The app validates and sanitizes it and keeps it as a **draft**. The merchant previews, edits, rejects or regenerates. Nothing reaches Shopify until the merchant confirms **Apply to Shopify**; **Publish** is a separate, separately confirmed action. Every applied description is kept, and the previous one can be restored.
+
+### The flow and the responsible files
+```text
+Admin UI  app/routes/app.products.$id.tsx  (session)      Developer API  /api/v1/...  (Bearer key)
+                         └──────────────┬───────────────────────┘
+ services/description-generation.server.ts   validate, limits + create job under a shop lock (idempotent), run
+ services/description-apply.server.ts        stale check → productUpdate → re-fetch → version row; restore
+ services/publication.server.ts              list publications, guarded publishablePublish, audit row
+ services/description-prompt.ts              PROMPT_VERSION, system policy, untrusted-data blocks   (pure)
+ services/description-output.ts              JSON Schema, server validation, claim warnings          (pure)
+ services/html-sanitize.ts                   allowlist sanitizer                                     (pure)
+        │                          │                                   │
+ repositories/                     app/ai/                             app/shopify/
+  ai-generation.server.ts           openrouter-client.server.ts         queries.ts   + product media, publications
+  description-version.server.ts     config.server.ts (env, allowlist)   mutations.ts   productUpdate, publishablePublish
+  publication-action.server.ts                                          graphql-client.server.ts (reused)
+```
+The layering is unchanged: routes authenticate and parse, services decide, repositories and adapters talk to MySQL, OpenRouter and Shopify. The admin page and the API call the same services, and the tenant still comes only from the verified session or the API key.
+
+### Two state fields
+A generation has two independent questions: *did the machine finish?* and *what did the merchant decide?* One field cannot answer both (a job can succeed and its draft be rejected), so there are two.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> QUEUED: job row written (idempotency key)
+    QUEUED --> RUNNING
+    RUNNING --> SUCCEEDED: output valid, draft stored
+    RUNNING --> FAILED: provider error, invalid output, refusal
+    RUNNING --> FAILED: abandoned (older than timeout)
+```
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> DRAFT: only for SUCCEEDED jobs
+    DRAFT --> DRAFT: save edits (sanitized)
+    DRAFT --> REJECTED
+    DRAFT --> APPROVED
+    APPROVED --> APPLIED: productUpdate succeeded
+    APPROVED --> DRAFT: stale conflict or userErrors
+```
+Transitions are functions that refuse anything not drawn here. **Regenerate** never edits a job: it creates a new one with `previousJobId`, so every attempt and its cost stay visible. **Publish** is not a draft state; it is its own audited action on the product.
+
+### Decisions and why
+1. **Draft first, never straight to Shopify.** Model output is untrusted input, like a webhook body. It is validated, sanitized and shown to a person before it can change the live store. Generation may be automatic; Apply and Publish are always explicit.
+2. **In-process job, row written first.** Same pattern as the sync: the job row (with its idempotency key) is committed, the request returns 202, and the work runs as an unawaited promise. A `RUNNING` job older than the timeout is marked `FAILED` (abandoned), the same rule as sync runs. A durable worker is the known next step, not part of this scope.
+3. **Idempotency at two points.** Generate: unique `(shop_id, idempotency_key)`; a browser retry returns the existing job instead of a second billable call (same idea as `webhook_receipts.webhookId`). Apply: the single `APPROVED → APPLIED` transition happens under a row lock, so a double click cannot write twice.
+4. **Images are chosen by media ID, never by URL.** The server resolves the IDs against Shopify for that product and shop and sends Shopify's own CDN URLs to the provider. The client cannot make the server or the provider fetch an arbitrary address, and no image binaries are stored.
+5. **Prompt as a trust boundary.** The system message holds the rules and the output contract. Shopify fields, merchant context and images are each wrapped and labelled as untrusted data whose instructions must be ignored. Text parts come before image parts. The prompt text has a `PROMPT_VERSION` stored on every job, so outputs can be compared across prompt changes.
+6. **The prompt is not the defence.** A prompt can be talked around, so the server does not rely on it: strict JSON Schema at the provider → the same schema re-validated on the server (no extra or missing fields, length caps) → HTML sanitizer → claim warnings → the merchant's explicit approval.
+7. **Unsupported claims are surfaced, not silently fixed.** Medical, legal, sustainability, certification, origin, performance, warranty and material wording that is absent from the trusted product context produces a warning next to the draft. Detection is pattern-based: an aid for the merchant, not a guarantee.
+8. **Raw, validated and final are stored separately.** Both state fields and the merchant's working copy (`draftHtml`) live on `ai_generation_jobs`, the one mutable row that tracks the execution; `ai_generation_inputs` and `ai_generation_outputs` are write-once. `raw_json` is what the model returned, `validated_json` is what passed validation and sanitizing, and the merchant's final text lives in `product_description_versions`. Audits can tell the model's words from the merchant's.
+9. **Stale guard.** At generation the app snapshots Shopify's `updatedAt` and a SHA-256 of the current description. Immediately before `productUpdate` it re-fetches and compares. A mismatch returns 409 and the UI offers *Refresh context* and *Regenerate*; nothing is overwritten silently.
+10. **Write the minimum.** `productUpdate` sends only `descriptionHtml`. Transport errors, GraphQL errors and `userErrors` are three separate outcomes. After success the product is re-fetched and the local projection updated, so MySQL shows Shopify's canonical value.
+11. **Scopes grow only as needed.** `write_products` for Apply; `write_publications` only for Publish, which is checked against the shop's granted scopes at the moment of the action. This ends the read-only position described in section 6, decision 1; the badge path itself is unchanged.
+12. **Invalid or refused answers fail the job; they are not retried.** A retry is for something temporary (429, 5xx, timeout, network). An answer that fails validation is the model's response to this exact prompt, so repeating the call would most likely fail the same way while silently spending the merchant's quota. The job ends `FAILED` with the reason and a short sample of what the model said, and the merchant regenerates, which creates a new linked job.
+13. **Model allowlist, low-cost default.** Every listed model must accept images and structured outputs, and requests carry `provider.require_parameters: true` so OpenRouter never routes to an endpoint that ignores the schema. A router model (`openrouter/free`) is not allowed: the answering model would be unknown to the audit trail. Development used OpenRouter's free vision models. `OPENROUTER_MODELS` lists the permitted vision models that support structured outputs; the first is the default. A model outside the list is rejected before any provider call.
+14. **Limits counted in MySQL.** The limits and the job insert run in one transaction that locks the shop row, so two simultaneous requests cannot both pass. Concurrency and daily limits are counted from job rows, not memory, so they survive restarts and hold across processes.
+15. **Plain HTML editor with preview.** A textarea plus a rendered preview of the sanitized result. The sanitizer is a pure module, so the browser runs the very same function for the live preview that the server runs before storing; the preview cannot show something the server would strip. No rich-text dependency, and the merchant sees exactly what will be written.
+
+### Threat model
+| Risk | Control | Where |
+|---|---|---|
+| Credential exposure | `OPENROUTER_API_KEY` read only on the server, placeholder in `.env.example`, key and `Authorization` header never logged (logger redaction) | `app/ai/config.server.ts`, `app/lib/logger.server.ts` |
+| Cross-shop access | Every job, version, apply and publish lookup takes `shopId`; another shop's id is a 404 | repositories, `withApiAuth`, `requireActiveShop` |
+| Prompt injection (image text, product text, merchant context) | Untrusted-data blocks, fixed system policy, strict schema, server re-validation, human approval | `description-prompt.ts`, `description-output.ts` |
+| Hallucinated or regulated claims | Grounding instruction, claim warnings, approval required, warnings shown in the confirmation | `description-output.ts`, product page |
+| Unsafe HTML | Allowlist sanitizer on model output, on every merchant save, and again before the mutation | `html-sanitize.ts` |
+| Image abuse / server-side request forgery | Media IDs of the verified product only, 1–4 images, Shopify CDN URLs only, no uploads | `description-generation.server.ts`, `queries.ts` |
+| Unexpected cost | Model allowlist, max images, max output tokens, 1 running job and a daily cap per shop, usage stored per job | `ai-limits.server.ts`, `config.server.ts` |
+| Provider privacy | Server-side calls only, `provider.data_collection` from `OPENROUTER_DATA_COLLECTION` (default `deny`), `internalNote` never sent, retention documented | `openrouter-client.server.ts` |
+| Accidental publication | Generation never publishes; Apply and Publish have separate confirmations and separate audit rows | `description-apply.server.ts`, `publication.server.ts` |
+| Stale overwrite | `updatedAt` + description hash compared right before the write; 409 on mismatch | `description-apply.server.ts` |
+
+### HTML policy
+Allowed tags: `p`, `h2`, `h3`, `h4`, `ul`, `ol`, `li`, `strong`, `em`, `br`. **No attributes at all.** Everything else is removed: `script`, `style`, `a`, `img`, `iframe`, event handlers, unknown tags. Links and images are excluded on purpose: a description does not need them, and they are the usual carriers of injected content.
+
+### Limits (defaults, overridable by environment)
+| Limit | Value |
+|---|---|
+| Images per generation | 1–4 |
+| Merchant context | ≤ 2,000 characters |
+| `descriptionHtml` | ≤ 10,000 characters |
+| `shortDescription` / `seoTitle` / `seoDescription` | ≤ 300 / 70 / 160 characters |
+| `highlights` | ≤ 8 items × 120 characters |
+| Output tokens | ≤ 1,500 |
+| Provider timeout | 60 s |
+| Retries | 2, only for 429, 5xx and network errors |
+| Per shop | 1 running job, 50 generations per day |
+
+### What is stored and what is not
+**Stored:** product snapshot, merchant context, selected media IDs, raw and validated model JSON, warnings, model, prompt version, input hash, token usage, estimated cost, latency, OpenRouter generation id, error summary, every applied description with the value it replaced, publish actions with their `userErrors`.
+**Never stored or logged:** the OpenRouter key, authorization headers, image binaries or base64, prompt text in logs. Logs carry identifiers and numbers only (request, shop, product, job, model, latency, usage, result).
+**Sent to the provider:** trusted product fields, merchant context, Shopify CDN image URLs (already public). Not sent: `internalNote`, API keys, session data, other shops' data.
+
+### Known limits
+- In-process runner: a restart abandons a running job until the timeout marks it failed; the merchant regenerates. A MySQL-leased worker is the next step.
+- Claim detection is pattern-based and will miss paraphrases; the merchant's review is the real control.
+- Request rate limits are still in memory (single process); spend limits are not, they are counted in MySQL.
+- Provider-side retention depends on the provider honouring OpenRouter's data policy setting. Free endpoints generally require `OPENROUTER_DATA_COLLECTION=allow`, meaning the provider may retain prompts; that setting is for development-store data only, and production keeps the default `deny` with a paid model.
+- Free models have low per-minute and per-day request caps, so `RATE_LIMITED` failures are expected in development.

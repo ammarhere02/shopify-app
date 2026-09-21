@@ -18,6 +18,16 @@ import {
   validateEnrichment,
 } from "../services/enrichment-validation";
 import { logger } from "../lib/logger.server";
+import { AiConfigError, loadAiConfig } from "../ai/config.server";
+import { AiDescriptionSection } from "../components/AiDescriptionSection";
+import type { AiImage } from "../components/AiDescriptionSection";
+import { getJob, listJobsForProduct } from "../repositories/ai-generation.server";
+import {
+  fetchProductForDescription,
+  selectableImages,
+} from "../services/description-generation.server";
+import { serializeGeneration } from "../services/generation-view";
+import { createShopifyClient } from "../shopify/graphql-client.server";
 
 function parseId(raw: string | undefined) {
   const id = Number(raw);
@@ -27,13 +37,51 @@ function parseId(raw: string | undefined) {
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = await requireActiveShop(session.shop);
   // Scoped by shop: another shop's id simply looks like "not found".
   const product = await getProductById(shop.id, parseId(params.id));
   if (!product) throw new Response("Product not found", { status: 404 });
 
+  // AI description: only names and limits reach the browser, never the key.
+  let ai = { configured: false, models: [] as string[], maxImages: 4 };
+  try {
+    const config = loadAiConfig();
+    ai = { configured: true, models: config.models, maxImages: config.maxImages };
+  } catch (err) {
+    if (!(err instanceof AiConfigError)) throw err;
+  }
+  // Images are read live: the local projection does not store media. A failure here must not
+  // take the badge editor down with it.
+  let images: AiImage[] = [];
+  let imagesError: string | null = null;
+  if (!product.deletedAt) {
+    try {
+      const client = createShopifyClient(admin.graphql, { logContext: { shopId: shop.id, productId: product.id } });
+      const remote = await fetchProductForDescription(client, product.shopifyProductGid);
+      images = remote ? selectableImages(remote) : [];
+    } catch (err) {
+      if (err instanceof Response) throw err; // re-authentication
+      imagesError = "Could not load this product's images from Shopify. Reload to try again.";
+    }
+  }
+  const jobs = await listJobsForProduct(shop.id, product.id, 10);
+  const latest = jobs[0] ? await getJob(shop.id, jobs[0].id) : null;
+
   return {
+    ai: {
+      ...ai,
+      images,
+      imagesError,
+      latest: latest ? serializeGeneration(latest) : null,
+      history: jobs.map((j) => ({
+        id: j.id,
+        status: j.status,
+        reviewStatus: j.reviewStatus,
+        model: j.model,
+        createdAt: j.createdAt.toISOString(),
+      })),
+    },
     product: {
       id: product.id,
       title: product.title,
@@ -85,7 +133,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function ProductDetail() {
-  const { product, enrichment } = useLoaderData<typeof loader>();
+  const { product, enrichment, ai } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const busy = fetcher.state !== "idle";
   const errors: Record<string, string> = fetcher.data?.errors ?? {};
@@ -184,6 +232,19 @@ export default function ProductDetail() {
           </s-stack>
         </form>
       </s-section>
+
+      {!product.deleted && (
+        <AiDescriptionSection
+          productId={product.id}
+          configured={ai.configured}
+          models={ai.models}
+          maxImages={ai.maxImages}
+          images={ai.images}
+          imagesError={ai.imagesError}
+          latest={ai.latest}
+          history={ai.history}
+        />
+      )}
 
       <s-section heading="Shopify data (read-only)">
         <s-paragraph>Status: {product.status}</s-paragraph>

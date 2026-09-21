@@ -60,3 +60,37 @@ export const PRODUCT_VARIANTS_QUERY = `#graphql
     }
   }
 `;
+
+// Live read for a description generation: the trusted fields, the CURRENT description (the local
+// projection does not store it) and the product's images. The merchant selects media by id from
+// this list, so only Shopify-hosted images of this product can ever be sent to the model.
+// Images are capped at 1024px: enough for a vision model, cheaper in tokens.
+export const PRODUCT_FOR_DESCRIPTION_QUERY = `#graphql
+  query ProductForDescription($id: ID!) {
+    product(id: $id) {
+      id
+      title
+      descriptionHtml
+      updatedAt
+      vendor
+      productType
+      tags
+      status
+      media(first: 20) {
+        nodes {
+          id
+          alt
+          mediaContentType
+          status
+          ... on MediaImage {
+            image {
+              url(transform: { maxWidth: 1024, maxHeight: 1024 })
+              width
+              height
+            }
+          }
+        }
+      }
+    }
+  }
+`;

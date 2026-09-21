@@ -18,7 +18,7 @@ Legend: `[x]` verified · `[ ]` not verified yet
 
 Not built: F-12 (metafield mutation, stretch), an admin page for API keys, ETag on the storefront endpoint. The architecture note, ER diagram, endpoint reference and test evidence are in [SUBMISSION.md](SUBMISSION.md). Submission documents still to write: OpenAPI file, demo.
 
-Automated checks, all passing: `npm test` (57), `npm run test:integration` (64, real MySQL), `npm run typecheck`, `npm run lint`, `npm run build`, `npx shopify theme check --path extensions/product-badge`. Shopify is mocked in automated tests; request signatures (webhook HMAC, app proxy) are real.
+Automated checks, all passing: `npm test` (111), `npm run test:integration` (139, real MySQL), `npm run typecheck`, `npm run lint`, `npm run build`, `npx shopify theme check --path extensions/product-badge`. Shopify is mocked in automated tests; request signatures (webhook HMAC, app proxy) are real.
 
 ---
 
