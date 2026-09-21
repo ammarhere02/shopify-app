@@ -4,6 +4,7 @@ import {
   OUTPUT_LIMITS,
   detectUnsupportedClaims,
   mergeWarnings,
+  shortenText,
   validateModelOutput,
 } from "../app/services/description-output";
 import { PROMPT_VERSION, buildDescriptionMessages, trustedText } from "../app/services/description-prompt";
@@ -39,14 +40,36 @@ describe("validateModelOutput", () => {
     expect(validateModelOutput(json(partial))).toMatchObject({ ok: false, reason: /Missing field: seoTitle/ });
   });
 
-  it("rejects wrong types and anything over the limits", () => {
+  it("rejects wrong types, an over-long description, and answers that ignore the limits entirely", () => {
     expect(validateModelOutput(json({ ...good, seoTitle: 5 }))).toMatchObject({ ok: false, reason: /seoTitle must be a string/ });
     expect(validateModelOutput(json({ ...good, highlights: "Soft" }))).toMatchObject({ ok: false });
     expect(validateModelOutput(json({ ...good, highlights: [1] }))).toMatchObject({ ok: false });
-    expect(validateModelOutput(json({ ...good, seoTitle: "x".repeat(OUTPUT_LIMITS.seoTitle + 1) }))).toMatchObject({ ok: false, reason: /seoTitle is longer/ });
-    expect(validateModelOutput(json({ ...good, descriptionHtml: "x".repeat(OUTPUT_LIMITS.descriptionHtml + 1) }))).toMatchObject({ ok: false });
-    expect(validateModelOutput(json({ ...good, highlights: Array(OUTPUT_LIMITS.highlights + 1).fill("a") }))).toMatchObject({ ok: false, reason: /Too many highlights/ });
-    expect(validateModelOutput(json({ ...good, highlights: ["x".repeat(OUTPUT_LIMITS.highlightLength + 1)] }))).toMatchObject({ ok: false });
+    // The description is what reaches Shopify and HTML cannot be cut safely: too long is invalid.
+    expect(validateModelOutput(json({ ...good, descriptionHtml: "x".repeat(OUTPUT_LIMITS.descriptionHtml + 1) }))).toMatchObject({ ok: false, reason: /descriptionHtml is longer/ });
+    expect(validateModelOutput(json({ ...good, seoDescription: "x".repeat(OUTPUT_LIMITS.seoDescription * 5 + 1) }))).toMatchObject({ ok: false, reason: /far longer/ });
+    expect(validateModelOutput(json({ ...good, highlights: Array(OUTPUT_LIMITS.highlights * 5 + 1).fill("a") }))).toMatchObject({ ok: false, reason: /Too many highlights/ });
+  });
+
+  it("shortens an over-long suggestion field at a word boundary and says so, instead of failing", () => {
+    const long = "This snowboard for kids features a vibrant purple top with a hexagonal logo that appears to radiate outwards, complemented by overlapping hexagons at the bottom and an abstract base.";
+    expect(long.length).toBeGreaterThan(OUTPUT_LIMITS.seoDescription);
+    const result = validateModelOutput(json({ ...good, seoDescription: long, seoTitle: "A".repeat(80), highlights: [...Array(10).keys()].map((i) => `Point ${i}`) }));
+    if (!result.ok) throw new Error(result.reason);
+    const { seoDescription, seoTitle, highlights, warnings } = result.value;
+    expect(seoDescription.length).toBeLessThanOrEqual(OUTPUT_LIMITS.seoDescription);
+    expect(seoDescription.endsWith("…")).toBe(true);
+    expect(long.startsWith(seoDescription.slice(0, -1))).toBe(true);
+    expect(long[seoDescription.length - 1]).toMatch(/[ ,]/); // cut between words, not inside one
+    expect(seoTitle.length).toBeLessThanOrEqual(OUTPUT_LIMITS.seoTitle);
+    expect(highlights).toHaveLength(OUTPUT_LIMITS.highlights);
+    expect([...warnings].sort()).toEqual([
+      `seoTitle was shortened from 80 to fit ${OUTPUT_LIMITS.seoTitle} characters`,
+      `seoDescription was shortened from ${long.length} to fit ${OUTPUT_LIMITS.seoDescription} characters`,
+      `Only the first ${OUTPUT_LIMITS.highlights} highlights were kept`,
+    ].sort());
+    expect((result.raw as typeof good).seoDescription).toBe(long); // the model's own words are kept as evidence
+    expect(shortenText("short", 10)).toBe("short");
+    expect(shortenText("x".repeat(50), 10)).toHaveLength(10);
   });
 
   it("sanitizes the HTML, keeps the raw answer, and flattens plain-text fields", () => {
@@ -139,6 +162,8 @@ describe("buildDescriptionMessages", () => {
     if (user.role !== "user" || user.content[0].type !== "text") throw new Error("unreachable");
     expect(user.content[0].text.length).toBeLessThan(4000);
     expect(PROMPT_VERSION).toMatch(/^v\d+$/);
+    const [system] = buildDescriptionMessages({ product, merchantContext: null, images });
+    expect(system.content).toMatch(/seoDescription: ONE sentence, aim for 120-150 characters, never more than 160/);
     expect(trustedText(product, "For skiers")).toContain("For skiers");
   });
 });

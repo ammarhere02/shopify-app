@@ -17,6 +17,18 @@ export const OUTPUT_LIMITS = {
   warningLength: 200,
 } as const;
 
+/** Beyond limit × this, an over-long field is treated as a broken answer, not an overrun. */
+const RUNAWAY_FACTOR = 5;
+
+/** Cut at the last word boundary that fits, ending with an ellipsis. Never longer than `max`. */
+export function shortenText(text: string, max: number) {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const lastSpace = cut.lastIndexOf(" ");
+  const base = lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut;
+  return `${base.replace(/[\s.,;:!?-]+$/, "")}…`;
+}
+
 export type DescriptionOutput = {
   descriptionHtml: string;
   shortDescription: string;
@@ -46,10 +58,10 @@ export const DESCRIPTION_JSON_SCHEMA = {
         type: "string",
         description: "Product description as simple HTML: p, h2-h4, ul, ol, li, strong, em, br only.",
       },
-      shortDescription: { type: "string", description: "One or two plain-text sentences." },
-      seoTitle: { type: "string", description: "Plain text, at most 70 characters." },
-      seoDescription: { type: "string", description: "Plain text, at most 160 characters." },
-      highlights: { type: "array", items: { type: "string" }, description: "Up to 8 short plain-text selling points." },
+      shortDescription: { type: "string", description: "One or two plain-text sentences. Hard limit 300 characters." },
+      seoTitle: { type: "string", description: "Plain text. Aim for 40-60 characters. Hard limit 70 characters." },
+      seoDescription: { type: "string", description: "Plain text, one sentence. Aim for 120-150 characters. Hard limit 160 characters." },
+      highlights: { type: "array", items: { type: "string" }, description: "Up to 8 short plain-text selling points, each under 100 characters." },
       warnings: {
         type: "array",
         items: { type: "string" },
@@ -91,32 +103,54 @@ export function validateModelOutput(content: string): ValidationResult {
   if (missing.length) return fail(`Missing field: ${missing.join(", ")}`);
 
   for (const key of ["descriptionHtml", "shortDescription", "seoTitle", "seoDescription"] as const) {
-    const value = obj[key];
-    if (typeof value !== "string") return fail(`${key} must be a string`);
-    if (value.length > OUTPUT_LIMITS[key]) return fail(`${key} is longer than ${OUTPUT_LIMITS[key]} characters`);
+    if (typeof obj[key] !== "string") return fail(`${key} must be a string`);
   }
   if (!isStringArray(obj.highlights)) return fail("highlights must be an array of strings");
   if (!isStringArray(obj.warnings)) return fail("warnings must be an array of strings");
-  if (obj.highlights.length > OUTPUT_LIMITS.highlights) return fail("Too many highlights");
-  if (obj.warnings.length > OUTPUT_LIMITS.warnings) return fail("Too many warnings");
-  if (obj.highlights.some((h) => h.length > OUTPUT_LIMITS.highlightLength)) return fail("A highlight is too long");
-  if (obj.warnings.some((w) => w.length > OUTPUT_LIMITS.warningLength)) return fail("A warning is too long");
+
+  // The description is what gets written to Shopify, and cutting HTML is not safe: too long = invalid.
+  if ((obj.descriptionHtml as string).length > OUTPUT_LIMITS.descriptionHtml) {
+    return fail(`descriptionHtml is longer than ${OUTPUT_LIMITS.descriptionHtml} characters`);
+  }
+  // A model that ignores the limits by this much did not follow the contract at all.
+  for (const key of ["shortDescription", "seoTitle", "seoDescription"] as const) {
+    if ((obj[key] as string).length > OUTPUT_LIMITS[key] * RUNAWAY_FACTOR) return fail(`${key} is far longer than ${OUTPUT_LIMITS[key]} characters`);
+  }
+  if (obj.highlights.length > OUTPUT_LIMITS.highlights * RUNAWAY_FACTOR) return fail("Too many highlights");
+  if (obj.warnings.length > OUTPUT_LIMITS.warnings * RUNAWAY_FACTOR) return fail("Too many warnings");
 
   const descriptionHtml = sanitizeHtml(obj.descriptionHtml as string);
   if (!htmlToText(descriptionHtml)) return fail("descriptionHtml is empty after sanitizing");
 
-  // Every other field is plain text: tags are removed, not rendered.
-  const plain = (text: string) => htmlToText(text);
+  // The remaining fields are plain-text suggestions that are shown, never written anywhere.
+  // Models cannot count characters reliably, so a modest overrun is repaired (cut at a word
+  // boundary) and reported as a warning instead of discarding an otherwise good description.
+  const repairs: string[] = [];
+  const fit = (label: string, text: string, max: number) => {
+    const plain = htmlToText(text);
+    if (plain.length <= max) return plain;
+    repairs.push(`${label} was shortened from ${plain.length} to fit ${max} characters`);
+    return shortenText(plain, max);
+  };
+  const highlights = obj.highlights.map((h) => htmlToText(h)).filter(Boolean);
+  if (highlights.length > OUTPUT_LIMITS.highlights) repairs.push(`Only the first ${OUTPUT_LIMITS.highlights} highlights were kept`);
+  const warnings = obj.warnings.map((w) => htmlToText(w)).filter(Boolean);
+
   return {
     ok: true,
     raw,
     value: {
       descriptionHtml,
-      shortDescription: plain(obj.shortDescription as string),
-      seoTitle: plain(obj.seoTitle as string),
-      seoDescription: plain(obj.seoDescription as string),
-      highlights: obj.highlights.map(plain).filter(Boolean),
-      warnings: obj.warnings.map(plain).filter(Boolean),
+      shortDescription: fit("shortDescription", obj.shortDescription as string, OUTPUT_LIMITS.shortDescription),
+      seoTitle: fit("seoTitle", obj.seoTitle as string, OUTPUT_LIMITS.seoTitle),
+      seoDescription: fit("seoDescription", obj.seoDescription as string, OUTPUT_LIMITS.seoDescription),
+      highlights: highlights
+        .slice(0, OUTPUT_LIMITS.highlights)
+        .map((h, i) => fit(`Highlight ${i + 1}`, h, OUTPUT_LIMITS.highlightLength)),
+      warnings: [
+        ...warnings.slice(0, OUTPUT_LIMITS.warnings).map((w) => shortenText(w, OUTPUT_LIMITS.warningLength)),
+        ...repairs,
+      ],
     },
   };
 }
