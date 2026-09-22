@@ -696,4 +696,4 @@ Built with Claude Code (Anthropic) as a pair-programming assistant: it drafted c
 | Tests and documentation | 2.5 h | 2.0 h |
 | **Total** | **18 h** | **16.5 h** |
 
-Not done, with next step: move single generations, apply, sync and webhooks onto the same worker (today only batches are queued; the others run in the request process and are recovered by timeout); `products/create` webhook; shared rate limiter; CI workflow.
+Not done, with next step: move single generations, apply, sync and webhooks onto the same worker (today only batches are queued; the others run in the request process and are recovered by timeout); shared rate limiter; CI workflow.

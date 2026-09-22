@@ -226,7 +226,6 @@ POST /webhooks/... → route action
 
 ### Known limits
 - Processing is inside the request; there is no queue, dead-letter or replay. Reconcile is the repair tool.
-- No `products/create` subscription. A new product appears on its first update event or the next sync.
 - The full sync does not apply the newer-than guard (it must refresh `syncedAt` on every row for stale-marking), so it can briefly write a slightly older copy during a concurrent webhook; the next event or Reconcile fixes it.
 - The logger redacts only top-level sensitive key names, so webhook code never passes payloads to it.
 

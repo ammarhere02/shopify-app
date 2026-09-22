@@ -64,7 +64,7 @@ Input is always the verified result of `authenticate.webhook` (the route does th
 3. Handler runs and calls `finish(tx, note?)`, which marks the receipt `PROCESSED` inside the handler's transaction. A deliberate skip is `PROCESSED` with a note in `error`.
 4. Handler throws → receipt `FAILED` (message cut to 1000 chars, never the payload) → `logger.error` → **500** so Shopify retries with the same `webhookId`; a `FAILED` receipt may be claimed again.
 
-`handleProductUpdate`: the payload supplies only the product id and `updated_at`. Cheap skip if the event is older than our `updatedAtShopify` → otherwise re-fetch with `PRODUCT_BY_ID_QUERY` (client: 1 attempt, 3s timeout, 4s budget, because Shopify fails a delivery after 5s) → `product: null` = skip → `completeVariants` → `mapProductNode` → transaction { `upsertProductIfNewer`; finish }. Unknown local product is created. No offline session → throws → `FAILED` + 500.
+`handleProductUpdate` (used by both `products/create` and `products/update`): the payload supplies only the product id and `updated_at`. Cheap skip if the event is older than our `updatedAtShopify` → otherwise re-fetch with `PRODUCT_BY_ID_QUERY` (client: 1 attempt, 3s timeout, 4s budget, because Shopify fails a delivery after 5s) → `product: null` = skip → `completeVariants` → `mapProductNode` → transaction { `upsertProductIfNewer`; finish }. Unknown local product is created. No offline session → throws → `FAILED` + 500.
 
 `handleProductDelete`: payload is `{ id }` → GID → transaction { `softDeleteProductByGid`; finish }. 0 rows matched is a normal no-op.
 

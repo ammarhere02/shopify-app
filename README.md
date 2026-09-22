@@ -72,7 +72,7 @@ MySQL 8 runs as the container `enrichment-hub-mysql`. A new volume is initialize
 1. **Synchronize.** On the app home page, *Sync now* imports the catalog using cursor pagination. Repeated runs update rows in place and do not modify enrichments. *Reconcile* performs the same full read to repair missed webhooks.
 2. **Enrich.** *Products* lists the local catalog with search and filters. A product's editor sets badge text (maximum 40 characters), badge colour (`#RRGGBB`), the active flag and an internal note.
 3. **Activate the theme block.** Online Store → Themes → Customize → product template → Add block → Apps → **Product Badge** → Save. Settings: visibility, alignment, style, text size, corner radius. On themes whose product card accepts app blocks (for example Horizon), **Product Card Badge** can be added inside the Product card block to show badges in product grids.
-4. **Webhooks.** `products/update`, `products/delete`, `app/uninstalled` and `app/scopes_update` are declared in `shopify.app.toml` and registered by `npm run dev`.
+4. **Webhooks.** `products/create`, `products/update`, `products/delete`, `app/uninstalled` and `app/scopes_update` are declared in `shopify.app.toml` and registered by `npm run dev` (or `shopify app deploy` for a deployed app).
 
 A badge is shown only when it is active and the product is active. Storefront responses are cached for 60 seconds.
 
@@ -144,7 +144,6 @@ Shopify API responses and the model provider are mocked in automated tests; no t
 - A single generation and the Shopify write run in the process that received the request; a restart abandons a running generation (marked failed after 5 minutes) or an in-flight apply (returned to approved after 2 minutes). Batches run through the in-process worker, whose queue is the database, so queued jobs survive a restart; a job that was mid-call is marked failed after 5 minutes.
 - Restore and Publish act on one product and one channel at a time; unpublishing is done in Shopify admin.
 - `variants` has no inventory field: the app reads products with `read_products` and never asks for inventory scopes.
-- There is no `products/create` subscription; a new product arrives with its first update or the next synchronization.
 - The `Dockerfile` is the unmodified template file and has not been validated for deployment.
 
 To upgrade the Admin API version, change `app/shopify.server.ts`, `.graphqlrc.ts` and `webhooks.api_version` in `shopify.app.toml` together, then re-validate the queries in `app/shopify/queries.ts`.

@@ -10,6 +10,17 @@ const SECRET = vi.hoisted(() => {
   process.env.SCOPES = "read_products";
   return process.env.SHOPIFY_API_SECRET;
 });
+// The Shopify node adapter captures globalThis.fetch when it is imported, so the stub must be in
+// place first. It forwards everything unless a test installs a handler for the shop's GraphQL URL.
+const shopifyFetch = vi.hoisted(() => {
+  const real = globalThis.fetch;
+  const state: { handler: ((url: string) => Response | null) | null } = { handler: null };
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    return state.handler?.(url) ?? real(input, init);
+  }) as typeof fetch;
+  return state;
+});
 
 const logged = vi.hoisted(() => [] as unknown[][]);
 vi.mock("../app/lib/logger.server", () => {
@@ -26,6 +37,7 @@ import {
 import { claimReceipt } from "../app/repositories/webhook-receipt.server";
 import { saveEnrichment } from "../app/repositories/enrichment.server";
 import { action as deleteRoute } from "../app/routes/webhooks.products.delete";
+import { action as createRoute } from "../app/routes/webhooks.products.create";
 import { action as uninstalledRoute } from "../app/routes/webhooks.app.uninstalled";
 import { product as node } from "./fixtures";
 
@@ -285,6 +297,27 @@ describe("route + framework signature check", () => {
       }),
     };
   };
+  /**
+   * The real authenticate.webhook builds `admin` from the shop's stored offline session and
+   * the library calls Shopify with the global fetch, so a route test that needs the re-fetch
+   * gets a session row plus a fetch stub answering the GraphQL request with one product node.
+   */
+  const graphqlMockFor = (product: unknown) => {
+    shopifyFetch.handler = (url) =>
+      url.includes(".myshopify.com") && url.includes("graphql")
+        ? new Response(JSON.stringify({ data: { product } }), { headers: { "content-type": "application/json" } })
+        : null;
+    return () => {
+      shopifyFetch.handler = null;
+    };
+  };
+  const withSession = (shop: Shop) =>
+    db.session.upsert({
+      where: { id: `offline_${shop.shopDomain}` },
+      create: { id: `offline_${shop.shopDomain}`, shop: shop.shopDomain, state: "x", isOnline: false, accessToken: "shpat_test", scope: "read_products" },
+      update: {},
+    });
+
   const call = async (route: typeof deleteRoute, request: Request) => {
     try {
       return (await route({ request, params: {}, context: {} } as never)) as Response;
@@ -293,6 +326,27 @@ describe("route + framework signature check", () => {
       throw thrown;
     }
   };
+
+  it("products/create: a signed delivery creates the local row from the re-fetch, receipt keeps the CREATE topic", async () => {
+    const id = ++nextId;
+    await withSession(shopA);
+    const restore = graphqlMockFor(node(id, 2));
+    try {
+      const body = JSON.stringify({ id, admin_graphql_api_id: `gid://shopify/Product/${id}`, title: "PAYLOAD TITLE MUST NOT BE USED" });
+      const first = signed("/webhooks/products/create", "products/create", shopA.shopDomain, body);
+      expect((await call(createRoute, first.request)).status).toBe(200);
+      const row = await local(shopA, id);
+      expect(row?.title).toBe("Red T-shirt");
+      expect(row?.variants).toHaveLength(2);
+      expect(await receipt(first.id)).toMatchObject({ status: "PROCESSED", topic: "PRODUCTS_CREATE", shopId: shopA.id });
+      // The same delivery again is a no-op; a forged signature is refused before any DB work.
+      expect((await call(createRoute, signed("/webhooks/products/create", "products/create", shopA.shopDomain, body, { id: first.id }).request)).status).toBe(200);
+      expect(await db.webhookReceipt.count({ where: { webhookId: first.id } })).toBe(1);
+      expect((await call(createRoute, signed("/webhooks/products/create", "products/create", shopA.shopDomain, body, { hmac: "AAAA" }).request)).status).toBe(401);
+    } finally {
+      restore();
+    }
+  });
 
   it("valid signature: processed; same delivery again: no second effect", async () => {
     const id = ++nextId;

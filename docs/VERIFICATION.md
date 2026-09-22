@@ -19,6 +19,7 @@ Legend: `[x]` verified · `[ ]` not verified yet
 | AI description: apply, publish, versions, restore | AI 08–12 (extension) | yes | yes | partly done |
 | AI description: security and reliability hardening | §9, §12 (extension) | yes | yes | — |
 | AI description: batch generation through a durable worker | AI 13 (extension, stretch) | yes | yes | open |
+| `products/create` webhook | review finding | yes | yes | open |
 
 Not built: F-12 (metafield mutation, stretch), an admin page for API keys, ETag on the storefront endpoint. The architecture note, ER diagram, endpoint reference and test evidence are in [SUBMISSION.md](SUBMISSION.md). OpenAPI file: [openapi.yaml](openapi.yaml). No demo video; the live checks below were run on the deployed app against the development store.
 
@@ -193,3 +194,9 @@ Audit of the review list against the code, with evidence:
 - [ ] Live: select 3 products → queued → drafts appear on each product page within a minute; restart the server with jobs queued → they still run
 
 Known limits: one lease at a time per process; a job mid-call during a restart is failed after 5 minutes; sync and webhooks are not on the worker.
+
+## `products/create` webhook
+
+- [x] Subscribed in both tomls (`shopify app config validate` passes); route reuses `handleProductUpdate`, receipt keeps topic `PRODUCTS_CREATE`
+- [x] Route test through the real `authenticate.webhook`: row created from the re-fetch (payload title ignored), repeat delivery no-op, forged signature 401
+- [ ] Live: create a product in Shopify admin → it appears in the app without a sync (needs `shopify app deploy` to register the topic)
