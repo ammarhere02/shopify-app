@@ -89,6 +89,11 @@ export type StartGenerationInput = {
   model?: string | null;
   idempotencyKey: string;
   previousJobId?: number | null;
+  /**
+   * Create the QUEUED row and stop: no `run` is returned, the worker picks the job up.
+   * The concurrency limit is skipped (queued jobs wait their turn); the daily limit still counts.
+   */
+  enqueueOnly?: boolean;
 };
 
 type MediaNode = {
@@ -231,7 +236,7 @@ export async function startGeneration(
     if (retried) return { job: retried, created: false };
 
     await failAbandonedJobs(shopId, new Date(), tx);
-    if ((await countActiveJobs(shopId, tx)) >= deps.config.maxConcurrentPerShop) {
+    if (!input.enqueueOnly && (await countActiveJobs(shopId, tx)) >= deps.config.maxConcurrentPerShop) {
       throw new GenerationError("LIMIT", "Another generation is still running for this shop");
     }
     if ((await countJobsSince(shopId, new Date(Date.now() - DAY_MS), tx)) >= deps.config.dailyLimitPerShop) {
@@ -264,19 +269,60 @@ export async function startGeneration(
     images: chosen.map(({ url, alt }) => ({ url, alt })),
     merchantContext,
   };
-  logger.info("ai.job_created", { shopId, productId: local.id, jobId: result.job.id, model, images: chosen.length });
+  logger.info("ai.job_created", { shopId, productId: local.id, jobId: result.job.id, model, images: chosen.length, queued: !!input.enqueueOnly });
+  if (input.enqueueOnly) return result;
   return { ...result, run: () => runGeneration(deps, shopId, result.job.id, prepared) };
 }
+
+type StoredSnapshot = {
+  title: string;
+  vendor: string | null;
+  productType: string | null;
+  tags: string[];
+  descriptionHtml: string;
+  images: ProductImageChoice[];
+};
+
+/**
+ * Rebuild the prompt input from what the job stored, so a worker can run a job created by
+ * another request or another process. Identical to what the inline run would have used:
+ * the snapshot is the trusted product data at creation time, by design (see input hash).
+ */
+export function prepareFromJob(job: AiGenerationJob & { input: { productSnapshotJson: unknown; merchantContext: string | null } | null }): Prepared | null {
+  const snapshot = job.input?.productSnapshotJson as StoredSnapshot | null | undefined;
+  if (!snapshot || !Array.isArray(snapshot.images)) return null;
+  return {
+    model: job.model,
+    product: {
+      title: snapshot.title,
+      vendor: snapshot.vendor,
+      productType: snapshot.productType,
+      tags: snapshot.tags ?? [],
+      currentDescriptionText: htmlToText(snapshot.descriptionHtml ?? ""),
+    },
+    images: snapshot.images.map(({ url, alt }) => ({ url, alt })),
+    merchantContext: job.input?.merchantContext ?? null,
+  };
+}
+
+/** What a worker needs to run a job: no Shopify client, the snapshot already holds the product. */
+export type RunDeps = Pick<GenerationDeps, "ai" | "config">;
 
 /**
  * The background part. Never throws: every outcome ends as a job state.
  * An invalid or refused answer FAILS the job and is not retried; the merchant regenerates,
  * which creates a new, linked job. Temporary provider failures were already retried by the client.
  */
-export async function runGeneration(deps: GenerationDeps, shopId: number, jobId: number, prepared: Prepared) {
+export async function runGeneration(
+  deps: RunDeps,
+  shopId: number,
+  jobId: number,
+  prepared: Prepared,
+  options: { leased?: boolean } = {}, // leased = the worker already moved the row to RUNNING
+) {
   const log = { shopId, jobId, model: prepared.model };
   try {
-    if (!(await markJobRunning(shopId, jobId))) return;
+    if (!options.leased && !(await markJobRunning(shopId, jobId))) return;
 
     const result = await deps.ai.generate({
       model: prepared.model,

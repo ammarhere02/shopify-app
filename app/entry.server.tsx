@@ -5,6 +5,11 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { startGenerationWorker } from "./services/generation-worker.server";
+
+// One polling loop per process, started when the server module loads. Off in tests
+// (they run the worker explicitly) and when OpenRouter is not configured.
+if (process.env.NODE_ENV !== "test" && process.env.AI_WORKER !== "off") startGenerationWorker();
 
 export const streamTimeout = 5000;
 

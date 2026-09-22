@@ -1,0 +1,19 @@
+%% AI description generator: asynchronous generation and the two write boundaries.
+%% Render: npx -y @mermaid-js/mermaid-cli -i ai-generation.mmd -o ai-generation.png
+flowchart LR
+  M[Merchant<br/>admin page or API key] -->|1 generate| R[route]
+  R -->|job row + idempotency key, 202| DB[(MySQL)]
+  R -.->|unawaited run| G[generation service]
+  G -->|media ids to CDN URLs| GQL[Shopify Admin GraphQL]
+  G -->|text + image URLs, JSON schema| OR[OpenRouter<br/>allowlisted vision model]
+  OR -->|structured output| G
+  G -->|validate, sanitize, warnings<br/>raw + validated + usage| DB
+  M -->|2 poll, edit, approve| R
+  M -->|3 apply / restore| A[apply service]
+  A -->|scope, live read, stale hash| GQL
+  A -->|productUpdate descriptionHtml| GQL
+  A -->|version row before + after| DB
+  M -->|4 publish, confirmed| P[publication service]
+  P -->|ACTIVE? shop's channel?| GQL
+  P -->|publishablePublish| GQL
+  P -->|publication_actions audit| DB

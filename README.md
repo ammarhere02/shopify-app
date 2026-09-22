@@ -54,7 +54,12 @@ npm run dev                   # shopify app dev
 |---|---|
 | `DATABASE_URL` | `.env`; the value in `.env.example` matches `docker-compose.yml` (port 3307, database `enrichment_hub`) |
 | `TEST_DATABASE_URL` | `.env`; integration tests only; must be local and end in `_test` |
-| `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `SCOPES` | Injected by `npm run dev`; otherwise from the app's page in the Shopify Dev Dashboard (`npm run env -- show`) |
+| `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `SCOPES` | Injected by `npm run dev`; otherwise from the app's page in the Shopify Dev Dashboard (`npm run env -- show`). On a deployed server `SCOPES` must equal the toml's `access_scopes` list |
+| `OPENROUTER_API_KEY` | Server only. From [openrouter.ai/keys](https://openrouter.ai/keys). Without it the app runs and the AI section says "not configured" |
+| `OPENROUTER_MODELS` | Comma-separated allowlist of models that accept **image input and structured outputs**; the first is the default. See *AI product descriptions* |
+| `OPENROUTER_DATA_COLLECTION` | `deny` (default: only providers that do not retain prompts) or `allow` (needed by most free models; development data only) |
+| `OPENROUTER_TIMEOUT_MS`, `OPENROUTER_MAX_RETRIES`, `AI_MAX_OUTPUT_TOKENS`, `AI_MAX_IMAGES`, `AI_DAILY_LIMIT_PER_SHOP`, `AI_MAX_CONCURRENT_PER_SHOP` | Optional; defaults 60000, 2, 1500, 4, 50, 1 (see `.env.example`) |
+| `AI_WORKER` | Optional; `off` disables the in-process generation worker (queued batches then wait) |
 
 The database credentials in this repository are placeholders for a local container. No secret, token or merchant data is committed.
 
@@ -70,6 +75,22 @@ MySQL 8 runs as the container `enrichment-hub-mysql`. A new volume is initialize
 4. **Webhooks.** `products/update`, `products/delete`, `app/uninstalled` and `app/scopes_update` are declared in `shopify.app.toml` and registered by `npm run dev`.
 
 A badge is shown only when it is active and the product is active. Storefront responses are cached for 60 seconds.
+
+## AI product descriptions
+
+The product editor's **AI description** section writes a description from the product's Shopify images and merchant-supplied facts, lets the merchant review it, and only then writes it to Shopify.
+
+**OpenRouter setup.** Set `OPENROUTER_API_KEY` (server only) and `OPENROUTER_MODELS`, a comma-separated allowlist of models that support both image input and structured outputs (filter on [openrouter.ai/models](https://openrouter.ai/models?modality=text+image-%3Etext&supported_parameters=structured_outputs)); the first is the default. Router models such as `openrouter/free` are refused because the answering model would be unknown. Used in development: `google/gemini-2.5-flash` (paid, about $0.001–0.003 per generation) and `nex-agi/nex-n2.5-mini:free` (low daily caps). Keep `OPENROUTER_DATA_COLLECTION=deny` in production; free endpoints usually need `allow`, for development data only.
+
+**Workflow.** Generate (1–4 images, optional facts; runs in the background, nothing in Shopify changes) → review the draft in an HTML editor with preview, usage and claim warnings → Save draft / Approve / Reject / Regenerate → **Apply to product** after a confirmation showing previous and new text; if the description changed in Shopify since generation, Apply refuses (`stale_product`). Every write is recorded as a version; **Restore** writes an older version back through the same checks, and *Restore what it replaced* on the newest row brings back the pre-app text.
+
+**Batches.** On the Products list, select up to 20 products and *Generate descriptions for selected*: one job per product is queued (using each product's first images) and a worker inside the server runs them one at a time per shop; drafts appear on each product page for review. Queued jobs are database rows, so a restart does not lose them.
+
+**Publishing.** *Publish to a channel…* lists the shop's sales channels with the product's state on each. The product must be Active in Shopify (a Draft product would be published but invisible, so the app refuses first). Every attempt is audited in `publication_actions`.
+
+**Scopes.** `read_products` to read, `write_products` for Apply/Restore, `write_publications` for Publish. A store that installed before the write scopes were added must approve them again (Setup, step 1); until then the page says so and the API answers `403 missing_scope`.
+
+**Limits.** Per shop: 1 generation at a time, 50 per rolling 24 h (counted in MySQL), 10 write actions/min on the admin page and per API key. Output is schema-validated and sanitized (`p h2 h3 h4 ul ol li strong em br`, no attributes) on arrival, on edit and before the write. Images are chosen by Shopify media id only; the server never fetches a client URL and stores no image bytes.
 
 ## Developer API
 
@@ -88,10 +109,19 @@ curl -H "Authorization: Bearer <key>" "https://<app-url>/api/v1/products?hasBadg
 | DELETE | `/api/v1/products/{productId}/enrichment` | 204 | 401, 404 |
 | POST | `/api/v1/syncs` | 202 | 400, 401, 409, 429 |
 | GET | `/api/v1/syncs/{id}` | 200 | 401, 404 |
+| GET | `/api/v1/products/{productId}/images` | 200 | 401, 404, 409 |
+| POST, GET | `/api/v1/products/{productId}/description-generations` | 202 / 200 | 401, 404, 409, 422, 429, 503 |
+| GET | `/api/v1/description-generations/{jobId}` | 200 | 401, 404 |
+| POST | `/api/v1/description-generations/{jobId}/regenerate` | 202 / 200 | 401, 404, 409, 422, 429, 503 |
+| POST | `/api/v1/description-generations/batch` | 202 | 401, 404, 409, 422, 429, 503 |
+| POST | `/api/v1/description-generations/{jobId}/apply` | 201 | 401, 403, 404, 409, 422, 429, 502 |
+| GET | `/api/v1/products/{productId}/description-versions` | 200 | 401, 404 |
+| POST | `/api/v1/products/{productId}/description-versions/{versionId}/restore` | 201 | 401, 403, 404, 422, 429, 502 |
+| GET, POST | `/api/v1/products/{productId}/publish` | 200 | 401, 403, 404, 409, 422, 429, 502 |
 | GET | `/apps/product-badge/products/{productId}` (storefront) | 200 | 400, 429 |
 | GET | `/apps/product-badge/badges?ids=…` (storefront, maximum 50 ids) | 200 | 400, 429 |
 
-Errors use one envelope: `{ "error": { "code", "message", "details"?, "requestId" } }`. The tenant is derived from the API key, never from the request. Full reference: [docs/SUBMISSION.md](docs/SUBMISSION.md#3-api-documentation).
+Errors use one envelope: `{ "error": { "code", "message", "details"?, "requestId" } }`. The tenant is derived from the API key, never from the request. Full reference with examples: [docs/SUBMISSION.md](docs/SUBMISSION.md#3-api-documentation); machine-readable: [docs/openapi.yaml](docs/openapi.yaml); Postman: [docs/postman/enrichment-hub.postman_collection.json](docs/postman/enrichment-hub.postman_collection.json).
 
 ## Tests
 
@@ -104,13 +134,15 @@ npm run build
 npx shopify theme check --path extensions/product-badge
 ```
 
-Shopify API responses are mocked in automated tests. Webhook and app proxy signatures are not: the tests sign real requests so the actual verification code runs. The integration runner accepts only a local database whose name ends in `_test`.
+Shopify API responses and the model provider are mocked in automated tests; no test makes a billable call. Webhook and app proxy signatures are not mocked: the tests sign real requests so the actual verification code runs. The integration runner accepts only a local database whose name ends in `_test`.
 
 ## Known limitations
 
 - Synchronization and webhook processing run inside the request (60-second budget for synchronization); there is no background worker or queue. Failed webhook deliveries remain recorded as `FAILED` and are repaired by reconciliation.
 - Rate limits are held in memory, per process.
-- API keys are managed from the command line; there is no admin page. An OpenAPI file is not provided; the endpoint reference is in `docs/SUBMISSION.md`.
+- API keys are managed from the command line; there is no admin page.
+- A single generation and the Shopify write run in the process that received the request; a restart abandons a running generation (marked failed after 5 minutes) or an in-flight apply (returned to approved after 2 minutes). Batches run through the in-process worker, whose queue is the database, so queued jobs survive a restart; a job that was mid-call is marked failed after 5 minutes.
+- Restore and Publish act on one product and one channel at a time; unpublishing is done in Shopify admin.
 - `variants` has no inventory field: the app reads products with `read_products` and never asks for inventory scopes.
 - There is no `products/create` subscription; a new product arrives with its first update or the next synchronization.
 - The `Dockerfile` is the unmodified template file and has not been validated for deployment.

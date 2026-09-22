@@ -25,7 +25,9 @@ Merchant Product Enrichment Hub. What is built and verified: `docs/VERIFICATION.
 | `lib/logger.server.ts` | JSON logger `logger.info|warn|error(event, fields)`. Redacts at every depth: keys matching token/secret/authorization/password/api key/cookie, and string VALUES that look like credentials (`Bearer …`, `sk-…`, `shpat_…`, `eh_live_…`) or `data:` URIs; strings are cut at 500 characters so a prompt, HTML body or image can never be logged whole. `redactForTests` exposes the result. Use it instead of `console.log` |
 | `lib/rate-limit.server.ts` | `createRateLimiter({ limit, windowMs })` → `hit(key)`, `blocked(key)`. In-memory fixed window, one process only |
 | `lib/badge-contrast.ts` | `readableTextColor(hex)` → black or white text with at least 4.5:1 contrast. Pure |
+| `lib/generation-limits.ts` | `BATCH_MAX` (20). Not `.server` because the product list imports it |
 | `lib/product-status.ts` | `PRODUCT_STATUSES` (ACTIVE, DRAFT, ARCHIVED). Not `.server` because the UI imports it |
+| `entry.server.tsx` | Template request handler, plus `startGenerationWorker()` on load: one polling loop per process for queued AI generations (skipped when `NODE_ENV=test` or `AI_WORKER=off`) |
 | `shopify.server.ts` | `shopifyApp` config: `ApiVersion.July26` (2026-07), Prisma session storage, `afterAuth` → `recordInstall`. Exports `authenticate` |
 | `db.server.ts` | Single PrismaClient (default export `db`) |
 

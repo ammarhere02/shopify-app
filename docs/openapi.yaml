@@ -1,0 +1,586 @@
+openapi: 3.1.0
+info:
+  title: Merchant Product Enrichment Hub — Developer API
+  version: "1.0"
+  description: |
+    Bearer-key API of the Enrichment Hub Shopify app. The API key identifies the shop:
+    no request ever carries a shop parameter, and another shop's resource looks like 404.
+    `{productId}` is the numeric Shopify product id; responses carry full GIDs.
+    Every failure uses one envelope (`Error`) and every response has an `X-Request-Id` header.
+    Rate limits: 60/min per key; `sync` bucket 5/min; `generation` bucket (generate, regenerate,
+    apply, restore, publish) 10/min; 20 failed logins/min per IP. Limited → 429 + `Retry-After`.
+servers:
+  - url: https://enrichment-hub.onrender.com/api/v1
+    description: Deployed app (replace with your app URL)
+security:
+  - bearerKey: []
+
+tags:
+  - name: Products
+  - name: Enrichment
+    description: Storefront badge and internal note
+  - name: Sync
+  - name: AI descriptions
+    description: Generate, review, apply, restore
+  - name: Publishing
+
+paths:
+  /products:
+    get:
+      tags: [Products]
+      summary: List the shop's products with their enrichment
+      parameters:
+        - { name: query, in: query, schema: { type: string }, description: Title search }
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, DRAFT, ARCHIVED] } }
+        - { name: hasBadge, in: query, schema: { type: string, enum: ["true", "false"] } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - { name: cursor, in: query, schema: { type: string }, description: Opaque token from `pageInfo.nextCursor` }
+      responses:
+        "200":
+          description: Page of products
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Product" } }
+                  pageInfo:
+                    type: object
+                    properties:
+                      hasNextPage: { type: boolean }
+                      nextCursor: { type: [string, "null"] }
+              example:
+                data:
+                  - id: gid://shopify/Product/8012345678901
+                    title: Blue Beanie
+                    handle: blue-beanie
+                    status: ACTIVE
+                    vendor: Acme
+                    productType: Hats
+                    updatedAtShopify: "2026-09-20T09:58:00.000Z"
+                    syncedAt: "2026-09-20T10:00:05.000Z"
+                    enrichment: { badgeText: New, badgeColor: "#1A7F37", active: true, internalNote: Autumn launch, updatedAt: "2026-09-20T10:05:00.000Z" }
+                pageInfo: { hasNextPage: true, nextCursor: eyJpZCI6NDJ9 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooMany" }
+
+  /products/{productId}:
+    parameters: [{ $ref: "#/components/parameters/productId" }]
+    get:
+      tags: [Products]
+      summary: One product with variants and enrichment
+      responses:
+        "200":
+          description: Product
+          content:
+            application/json:
+              schema: { type: object, properties: { data: { $ref: "#/components/schemas/ProductWithVariants" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /products/{productId}/enrichment:
+    parameters: [{ $ref: "#/components/parameters/productId" }]
+    put:
+      tags: [Enrichment]
+      summary: Create or replace the badge and note
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [badgeText, badgeColor]
+              properties:
+                badgeText: { type: string, maxLength: 40 }
+                badgeColor: { type: string, pattern: "^#[0-9A-Fa-f]{6}$" }
+                active: { type: boolean, default: true }
+                internalNote: { type: [string, "null"], maxLength: 2000, description: Never sent to the storefront }
+            example: { badgeText: New, badgeColor: "#1A7F37", active: true, internalNote: Autumn launch }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Enrichment" } } } } } }
+        "201": { description: Created, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Enrichment" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413": { description: Body over 16 KB, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Validation" }
+    delete:
+      tags: [Enrichment]
+      summary: Remove the enrichment (idempotent)
+      responses:
+        "204": { description: Removed, or nothing to remove }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /syncs:
+    post:
+      tags: [Sync]
+      summary: Start a catalog sync in the background
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { type: { type: string, enum: [FULL, RECONCILE], default: FULL } } }
+      responses:
+        "202":
+          description: Started; poll the `Location` header
+          headers: { Location: { schema: { type: string }, example: /api/v1/syncs/12 } }
+          content:
+            application/json:
+              schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncRun" } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: "`sync_in_progress` or `shop_session_unavailable`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429": { $ref: "#/components/responses/TooMany" }
+
+  /syncs/{id}:
+    get:
+      tags: [Sync]
+      summary: Progress and result of a sync run
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: Run, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/SyncRun" } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /products/{productId}/images:
+    parameters: [{ $ref: "#/components/parameters/productId" }]
+    get:
+      tags: [AI descriptions]
+      summary: Shopify images a generation may use (read live)
+      description: Only these ids are accepted as `mediaIds`. The server never fetches a client-supplied URL.
+      responses:
+        "200":
+          description: READY images of the product
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { type: object, properties: { id: { type: string }, url: { type: string }, alt: { type: [string, "null"] } } }
+              example: { data: [{ id: gid://shopify/MediaImage/201, url: "https://cdn.shopify.com/s/files/1/…/beanie_1024x1024.jpg", alt: null }] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/NoSession" }
+
+  /products/{productId}/description-generations:
+    parameters: [{ $ref: "#/components/parameters/productId" }]
+    post:
+      tags: [AI descriptions]
+      summary: Start an AI description generation (background job)
+      description: |
+        Nothing in Shopify changes. Requires an `Idempotency-Key` header (or `idempotencyKey` in the body):
+        a repeated key returns the existing job with 200 and never makes a second billable call.
+      parameters: [{ $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerationRequest" }
+            example: { mediaIds: [gid://shopify/MediaImage/201, gid://shopify/MediaImage/202], merchantContext: "Merino wool, made in Portugal, for winter commuters", model: google/gemini-2.5-flash }
+      responses:
+        "202":
+          description: New job; poll `Location`
+          headers: { Location: { schema: { type: string }, example: /api/v1/description-generations/17 } }
+          content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Generation" } } } } }
+        "200": { description: Same idempotency key seen before; the existing job, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Generation" } } } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/NoSession" }
+        "413": { description: Body over 16 KB, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Validation" }
+        "429": { description: "`generation_limit_reached` (1 running per shop, 50 per 24 h) or the per-key bucket", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+    get:
+      tags: [AI descriptions]
+      summary: The product's generations, newest first (max 20)
+      responses:
+        "200":
+          description: List
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        status: { $ref: "#/components/schemas/GenerationStatus" }
+                        reviewStatus: { $ref: "#/components/schemas/ReviewStatus" }
+                        model: { type: string }
+                        previousGenerationId: { type: [integer, "null"] }
+                        createdAt: { type: string, format: date-time }
+                        completedAt: { type: [string, "null"], format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /description-generations/{jobId}:
+    parameters: [{ $ref: "#/components/parameters/jobId" }]
+    get:
+      tags: [AI descriptions]
+      summary: Status, draft, warnings, usage and error of one generation
+      responses:
+        "200":
+          description: Generation
+          content:
+            application/json:
+              schema: { type: object, properties: { data: { $ref: "#/components/schemas/Generation" } } }
+              example:
+                data:
+                  id: 17
+                  status: SUCCEEDED
+                  reviewStatus: DRAFT
+                  previousGenerationId: null
+                  provider: openrouter
+                  model: google/gemini-2.5-flash
+                  promptVersion: v2
+                  inputHash: 9f2c…e1
+                  input: { mediaIds: [gid://shopify/MediaImage/201], merchantContext: Merino wool, imageCount: 1 }
+                  draftHtml: "<p>A merino beanie for cold commutes.</p><ul><li>Soft, itch-free wool</li></ul>"
+                  generated: { descriptionHtml: "<p>A merino beanie for cold commutes.</p><ul><li>Soft, itch-free wool</li></ul>", shortDescription: A warm merino beanie., seoTitle: Merino Beanie, seoDescription: A soft merino wool beanie for winter commuting., highlights: [Merino wool], warnings: [] }
+                  warnings: ["Unsupported origin claim: 'made in Portugal' is not in the product data"]
+                  usage: { promptTokens: 1180, completionTokens: 210, estimatedCostUsd: 0.00092, latencyMs: 4210, generationId: gen-abc123 }
+                  error: null
+                  createdAt: "2026-09-22T10:00:00.000Z"
+                  startedAt: "2026-09-22T10:00:00.200Z"
+                  completedAt: "2026-09-22T10:00:04.500Z"
+                  reviewedAt: null
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /description-generations/{jobId}/regenerate:
+    parameters: [{ $ref: "#/components/parameters/jobId" }]
+    post:
+      tags: [AI descriptions]
+      summary: New generation linked to a previous one
+      description: Reuses the previous attempt's images, context and model unless overridden. History is never overwritten.
+      parameters: [{ $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { $ref: "#/components/schemas/GenerationRequest" } } }
+      responses:
+        "202": { description: New job, headers: { Location: { schema: { type: string } } }, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Generation" } } } } } }
+        "200": { description: Same idempotency key, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Generation" } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "`invalid_state`: the previous job is still running; or `shop_session_unavailable`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { $ref: "#/components/responses/Validation" }
+        "429": { $ref: "#/components/responses/TooMany" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /description-generations/batch:
+    post:
+      tags: [AI descriptions]
+      summary: Queue one generation per product (up to 20); a worker runs them
+      description: |
+        Nothing runs inline. Each product's first images (up to `AI_MAX_IMAGES`) are used. Each job gets the key
+        `<Idempotency-Key>-p<productId>`, so a repeated call creates nothing twice. Products without a ready image
+        are returned in `skipped`. The daily limit stops the batch at the first refused product. Poll each job at
+        `GET /description-generations/{jobId}`.
+      parameters: [{ $ref: "#/components/parameters/idempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [productIds]
+              properties:
+                productIds: { type: array, minItems: 1, maxItems: 20, items: { type: string, pattern: "^[1-9][0-9]{0,19}$" }, description: Numeric Shopify product ids }
+                merchantContext: { type: [string, "null"], maxLength: 2000 }
+                model: { type: string }
+            example: { productIds: ["8012345678901", "8012345678902"], merchantContext: "Winter collection, merino wool" }
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      jobs: { type: array, items: { type: object, properties: { productId: { type: string }, generationId: { type: integer }, created: { type: boolean } } } }
+                      skipped: { type: array, items: { type: object, properties: { productId: { type: string }, reason: { type: string } } } }
+              example: { data: { jobs: [{ productId: gid://shopify/Product/8012345678901, generationId: 18, created: true }], skipped: [{ productId: gid://shopify/Product/8012345678902, reason: No ready image }] } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: One or more products are not this shop's, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { $ref: "#/components/responses/NoSession" }
+        "422": { $ref: "#/components/responses/Validation" }
+        "429": { $ref: "#/components/responses/TooMany" }
+        "503": { $ref: "#/components/responses/NotConfigured" }
+
+  /description-generations/{jobId}/apply:
+    parameters: [{ $ref: "#/components/parameters/jobId" }]
+    post:
+      tags: [AI descriptions]
+      summary: Write the APPROVED draft to Shopify (productUpdate)
+      description: |
+        The job must be SUCCEEDED with reviewStatus APPROVED (approval is done in the admin UI).
+        The server re-reads the product; if its description changed since generation → 409 `stale_product`.
+        Writes only `descriptionHtml`, records a version with the text before and after, and marks the job APPLIED.
+        Exactly one of two simultaneous calls succeeds.
+      responses:
+        "201":
+          description: Written; the new version row
+          content:
+            application/json:
+              schema: { type: object, properties: { data: { $ref: "#/components/schemas/Version" } } }
+              example: { data: { id: 5, generationId: 17, source: AI, descriptionHtml: "<p>A merino beanie…</p>", previousDescriptionHtml: "<p>Old text</p>", restoredFromVersionId: null, appliedBy: "api-key:eh_live_AbCd", appliedAt: "2026-09-22T10:10:00.000Z", shopifyUpdatedAt: "2026-09-22T10:09:59.000Z" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/MissingScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`invalid_state` (not approved, already applied, being applied), `stale_product`, or `shop_session_unavailable`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: { code: stale_product, message: "The product description changed in Shopify since this text was generated. Refresh or regenerate.", details: { shopifyUpdatedAt: "2026-09-22T10:05:00Z" }, requestId: 6d1e… } }
+        "422": { $ref: "#/components/responses/ShopifyRejected" }
+        "429": { $ref: "#/components/responses/TooMany" }
+        "502": { $ref: "#/components/responses/ShopifyUnavailable" }
+
+  /products/{productId}/description-versions:
+    parameters: [{ $ref: "#/components/parameters/productId" }]
+    get:
+      tags: [AI descriptions]
+      summary: Versions this app wrote for the product, newest first (max 20)
+      responses:
+        "200": { description: List, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Version" } } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /products/{productId}/description-versions/{versionId}/restore:
+    parameters:
+      - { $ref: "#/components/parameters/productId" }
+      - { name: versionId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [AI descriptions]
+      summary: Write an earlier version back to Shopify
+      description: |
+        `which: written` (default) restores the text that version put in Shopify; `which: previous` restores
+        the text it replaced (on the oldest version, that is the description before this app touched the product).
+        Goes through the same scope check, sanitizer and mutation as Apply; appends a RESTORE version.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, properties: { which: { type: string, enum: [written, previous], default: written } } }
+      responses:
+        "201": { description: The new RESTORE version, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Version" } } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/MissingScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { description: "`validation_failed` (bad `which`) or `shopify_rejected`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/TooMany" }
+        "502": { $ref: "#/components/responses/ShopifyUnavailable" }
+
+  /products/{productId}/publish:
+    parameters: [{ $ref: "#/components/parameters/productId" }]
+    get:
+      tags: [Publishing]
+      summary: Sales channels with the product's state on each, plus this app's publish history
+      responses:
+        "200":
+          description: Channels and history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      productStatus: { type: string, enum: [ACTIVE, DRAFT, ARCHIVED] }
+                      publications:
+                        type: array
+                        items: { type: object, properties: { id: { type: string }, name: { type: string }, published: { type: boolean } } }
+                      history: { type: array, items: { $ref: "#/components/schemas/PublicationAction" } }
+              example: { data: { productStatus: ACTIVE, publications: [{ id: gid://shopify/Publication/11, name: Online Store, published: false }, { id: gid://shopify/Publication/12, name: Point of Sale, published: true }], history: [] } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/MissingScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502": { $ref: "#/components/responses/ShopifyUnavailable" }
+    post:
+      tags: [Publishing]
+      summary: Publish the product to one sales channel (publishablePublish)
+      description: The product must be ACTIVE (a DRAFT product would be "published" but invisible, so it is refused first). Every attempt is audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [publicationId], properties: { publicationId: { type: string, pattern: "^gid://shopify/Publication/[0-9]+$" } } }
+            example: { publicationId: gid://shopify/Publication/11 }
+      responses:
+        "200": { description: Published, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: { actionId: { type: integer }, publicationId: { type: string } } } } }, example: { data: { actionId: 3, publicationId: gid://shopify/Publication/11 } } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/MissingScope" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "`invalid_state`: the product is not ACTIVE", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "`validation_failed` (unknown or malformed channel) or `shopify_rejected`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/TooMany" }
+        "502": { $ref: "#/components/responses/ShopifyUnavailable" }
+
+components:
+  securitySchemes:
+    bearerKey:
+      type: http
+      scheme: bearer
+      description: "`eh_live_…` key from `npm run api-key -- create <shop-domain> <label>`. Only its SHA-256 hash is stored."
+  parameters:
+    productId:
+      name: productId
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[1-9][0-9]{0,19}$" }
+      description: Numeric Shopify product id (the number in `gid://shopify/Product/<id>`)
+    jobId:
+      name: jobId
+      in: path
+      required: true
+      schema: { type: integer }
+    idempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{8,64}$" }
+      description: Client-generated; a retried request with the same key returns the same job. May also be sent as `idempotencyKey` in the body.
+  responses:
+    BadRequest: { description: Malformed query, body or JSON, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Unauthorized:
+      description: Identical for missing, malformed, unknown and revoked keys and for uninstalled shops
+      headers: { WWW-Authenticate: { schema: { type: string }, example: Bearer } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" }, example: { error: { code: unauthorized, message: A valid API key is required, requestId: 6d1e… } } } }
+    NotFound: { description: Unknown to this shop (including another shop's resource), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Validation: { description: "`validation_failed` with per-field `details`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" }, example: { error: { code: validation_failed, message: Invalid generation request, details: { mediaIds: Each image must be a Shopify MediaImage id }, requestId: 6d1e… } } } } }
+    TooMany:
+      description: Rate limited
+      headers: { Retry-After: { schema: { type: integer } } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NoSession: { description: "`shop_session_unavailable`: open the app in Shopify admin, then retry", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    NotConfigured: { description: "`ai_not_configured`: OPENROUTER_API_KEY / OPENROUTER_MODELS missing on the server", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    MissingScope: { description: "`missing_scope`: the shop has not granted write_products / write_publications; reopen the app in Shopify admin to approve", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    ShopifyRejected: { description: "`shopify_rejected`: Shopify `userErrors`, keyed by field in `details`", content: { application/json: { schema: { $ref: "#/components/schemas/Error" }, example: { error: { code: shopify_rejected, message: Shopify did not accept the description, details: { descriptionHtml: is too long }, requestId: 6d1e… } } } } }
+    ShopifyUnavailable: { description: "`shopify_unavailable` (transport) or `shopify_error` (GraphQL); `shopify_throttled` is 429 with Retry-After. Shopify's own text is never echoed.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { description: Field errors or extra context; shape depends on `code` }
+            requestId: { type: string, description: Also in the `X-Request-Id` header }
+    Enrichment:
+      type: object
+      properties:
+        badgeText: { type: string }
+        badgeColor: { type: string, description: Uppercase `#RRGGBB` }
+        active: { type: boolean }
+        internalNote: { type: [string, "null"] }
+        updatedAt: { type: string, format: date-time }
+    Product:
+      type: object
+      properties:
+        id: { type: string, example: gid://shopify/Product/8012345678901 }
+        title: { type: string }
+        handle: { type: string }
+        status: { type: string, enum: [ACTIVE, DRAFT, ARCHIVED] }
+        vendor: { type: [string, "null"] }
+        productType: { type: [string, "null"] }
+        updatedAtShopify: { type: string, format: date-time }
+        syncedAt: { type: string, format: date-time }
+        enrichment: { oneOf: [{ $ref: "#/components/schemas/Enrichment" }, { type: "null" }] }
+    ProductWithVariants:
+      allOf:
+        - { $ref: "#/components/schemas/Product" }
+        - type: object
+          properties:
+            variants:
+              type: array
+              items: { type: object, properties: { id: { type: string }, title: { type: string }, sku: { type: [string, "null"] }, price: { type: string, description: Decimal string } } }
+    SyncRun:
+      type: object
+      properties:
+        id: { type: integer }
+        type: { type: string, enum: [FULL, RECONCILE] }
+        status: { type: string, enum: [RUNNING, SUCCEEDED, FAILED] }
+        counts: { type: object, properties: { fetched: { type: integer }, inserted: { type: integer }, updated: { type: integer }, markedStale: { type: integer }, failed: { type: integer } } }
+        error: { type: [string, "null"] }
+        startedAt: { type: string, format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
+    GenerationStatus: { type: string, enum: [QUEUED, RUNNING, SUCCEEDED, FAILED] }
+    ReviewStatus: { type: [string, "null"], enum: [DRAFT, APPROVED, REJECTED, APPLYING, APPLIED, null], description: Null until the job SUCCEEDED }
+    GenerationRequest:
+      type: object
+      properties:
+        mediaIds: { type: array, minItems: 1, maxItems: 4, items: { type: string, pattern: "^gid://shopify/MediaImage/[0-9]+$" }, description: Must be READY images of this product (see `/images`); required on create, optional on regenerate }
+        merchantContext: { type: [string, "null"], maxLength: 2000, description: Facts for the writer; treated as untrusted data }
+        model: { type: string, description: Must be in the server's `OPENROUTER_MODELS` allowlist; default = first entry }
+        idempotencyKey: { type: string, description: Alternative to the `Idempotency-Key` header }
+    Generation:
+      type: object
+      properties:
+        id: { type: integer }
+        status: { $ref: "#/components/schemas/GenerationStatus" }
+        reviewStatus: { $ref: "#/components/schemas/ReviewStatus" }
+        previousGenerationId: { type: [integer, "null"] }
+        provider: { type: string }
+        model: { type: string }
+        promptVersion: { type: string }
+        inputHash: { type: string, description: SHA-256 of the normalized input (audit evidence) }
+        input: { type: [object, "null"], properties: { mediaIds: { type: array, items: { type: string } }, merchantContext: { type: [string, "null"] }, imageCount: { type: integer } } }
+        draftHtml: { type: [string, "null"], description: The merchant's working copy, always sanitized }
+        generated:
+          type: [object, "null"]
+          description: What the model wrote (after validation and sanitizing); only `descriptionHtml` can ever be written to Shopify
+          properties:
+            descriptionHtml: { type: string }
+            shortDescription: { type: string }
+            seoTitle: { type: string }
+            seoDescription: { type: string }
+            highlights: { type: array, items: { type: string } }
+            warnings: { type: array, items: { type: string } }
+        warnings: { type: array, items: { type: string }, description: Model warnings plus server-detected unsupported claims }
+        usage: { type: [object, "null"], properties: { promptTokens: { type: [integer, "null"] }, completionTokens: { type: [integer, "null"] }, estimatedCostUsd: { type: [number, "null"] }, latencyMs: { type: integer }, generationId: { type: [string, "null"] } } }
+        error: { type: [string, "null"], description: "FAILED reason, e.g. `INVALID_OUTPUT: …`, `RATE_LIMITED: …`" }
+        createdAt: { type: string, format: date-time }
+        startedAt: { type: [string, "null"], format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
+        reviewedAt: { type: [string, "null"], format: date-time }
+    Version:
+      type: object
+      properties:
+        id: { type: integer }
+        generationId: { type: [integer, "null"], description: Null for a RESTORE }
+        source: { type: string, enum: [AI, RESTORE] }
+        descriptionHtml: { type: string, description: What was written (as Shopify stored it) }
+        previousDescriptionHtml: { type: [string, "null"], description: What it replaced }
+        restoredFromVersionId: { type: [integer, "null"] }
+        appliedBy: { type: string, description: "`api-key:<prefix>` or `admin:<shop domain>`" }
+        appliedAt: { type: string, format: date-time }
+        shopifyUpdatedAt: { type: string, format: date-time }
+    PublicationAction:
+      type: object
+      properties:
+        id: { type: integer }
+        publicationId: { type: string }
+        status: { type: string, enum: [REQUESTED, SUCCEEDED, FAILED] }
+        userErrors: { type: [array, "null"], items: { type: object, properties: { field: { type: [array, "null"], items: { type: string } }, message: { type: string } } } }
+        requestedBy: { type: string }
+        requestedAt: { type: string, format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }

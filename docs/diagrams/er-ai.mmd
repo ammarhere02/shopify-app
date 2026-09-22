@@ -1,0 +1,16 @@
+%% ER additions for the AI description generator. All rows reach a shop.
+erDiagram
+  shops ||--o{ ai_generation_jobs : owns
+  products ||--o{ ai_generation_jobs : "generated for"
+  ai_generation_jobs ||--o| ai_generation_inputs : "written once"
+  ai_generation_jobs ||--o| ai_generation_outputs : "written once"
+  ai_generation_jobs |o--o{ ai_generation_jobs : "previousJobId (regenerate)"
+  ai_generation_jobs |o--o{ product_description_versions : "applied as"
+  products ||--o{ product_description_versions : history
+  product_description_versions |o--o{ product_description_versions : restoredFromId
+  products ||--o{ publication_actions : audited
+  ai_generation_jobs { int id PK  int shopId FK  int productId FK  enum status  enum reviewStatus  text draftHtml  string idempotencyKey  int previousJobId  string model  string promptVersion  char inputHash  text error }
+  ai_generation_inputs { int jobId FK  json selectedMediaIds  json productSnapshotJson  text merchantContext  int imageCount }
+  ai_generation_outputs { int jobId FK  json rawJson  json validatedJson  json warningsJson  int promptTokens  int completionTokens  decimal cost  string generationId  int latencyMs }
+  product_description_versions { int id PK  int shopId FK  int productId FK  int jobId FK  enum source  text descriptionHtml  text previousDescriptionHtml  datetime shopifyUpdatedAt  string appliedBy  int restoredFromId }
+  publication_actions { int id PK  int shopId FK  int productId FK  string publicationGid  enum status  json userErrorsJson  string requestedBy  datetime completedAt }

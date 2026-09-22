@@ -18,10 +18,11 @@ Legend: `[x]` verified · `[ ]` not verified yet
 | AI description: generate, review, edit | AI 01–07 (extension) | yes | yes | partly done |
 | AI description: apply, publish, versions, restore | AI 08–12 (extension) | yes | yes | partly done |
 | AI description: security and reliability hardening | §9, §12 (extension) | yes | yes | — |
+| AI description: batch generation through a durable worker | AI 13 (extension, stretch) | yes | yes | open |
 
-Not built: F-12 (metafield mutation, stretch), an admin page for API keys, ETag on the storefront endpoint. The architecture note, ER diagram, endpoint reference and test evidence are in [SUBMISSION.md](SUBMISSION.md). Submission documents still to write: OpenAPI file, demo.
+Not built: F-12 (metafield mutation, stretch), an admin page for API keys, ETag on the storefront endpoint. The architecture note, ER diagram, endpoint reference and test evidence are in [SUBMISSION.md](SUBMISSION.md). OpenAPI file: [openapi.yaml](openapi.yaml). No demo video; the live checks below were run on the deployed app against the development store.
 
-Automated checks, all passing: `npm test` (127), `npm run test:integration` (161, real MySQL), `npm run typecheck`, `npm run lint`, `npm run build`, `npx shopify theme check --path extensions/product-badge`. Shopify is mocked in automated tests; request signatures (webhook HMAC, app proxy) are real.
+Automated checks, all passing: `npm test` (127), `npm run test:integration` (170, real MySQL), `npm run typecheck`, `npm run lint`, `npm run build`, `npx shopify theme check --path extensions/product-badge`. Shopify is mocked in automated tests; request signatures (webhook HMAC, app proxy) are real.
 
 ---
 
@@ -44,9 +45,9 @@ Deliberate choice: `variants` has no inventory field. The assignment says "if au
 - [x] Unit tests and real-MySQL integration tests
 
 Live dev-store checklist (`npm run dev`, open the app in the dev store admin):
-- [ ] Shop identity and the Sync now button appear
-- [ ] With at least 20 test products, Sync now → SUCCEEDED, local product and variant counts match
-- [ ] Sync again unchanged → 0 inserted, same totals
+- [x] Shop identity and the Sync now button appear (deployed app, 2026-09-22)
+- [x] Sync now → SUCCEEDED; run #1 fetched 16, inserted 16 (the store has 16 products, 23 variants)
+- [x] Sync again unchanged → runs #2 and #3: fetched 16, inserted 0, updated 16
 - [ ] Rename a product in Shopify, sync → local title updates, same local row id
 - [ ] Product with more than 25 variants → all variants copied
 - [ ] Delete a disposable product in Shopify, sync → local row soft-deleted
@@ -91,7 +92,7 @@ Live dev-store checklist. Evidence read from the development database on 2026-09
 - [ ] Log lines reviewed for `webhook.processed` metadata and absence of payload or secrets
 - [x] Receipts reach `PROCESSED` (both rows, `error` NULL, `shopId` set)
 - [ ] Safe failure → 500 + `FAILED`, then Shopify's retry → `PROCESSED`. No `FAILED` row exists yet
-- [ ] Uninstall and reinstall write lifecycle receipts. No `APP_UNINSTALLED` / `APP_SCOPES_UPDATE` receipt exists yet
+- [x] Uninstall and reinstall: two `APP_UNINSTALLED` receipts `PROCESSED`, sessions deleted, shop reactivated with the new scopes on reinstall (2026-09-22)
 
 Known limits: synchronous processing, no queue or replay of our own; after Shopify's retries run out a receipt stays `FAILED` and Reconcile repairs the data; no `products/create` subscription (the first update or the next sync creates the row); the full sync does not apply the newer-than guard.
 
@@ -137,9 +138,9 @@ Beyond the assignment (it asks only for a block "suitable for a product template
 - [x] Tests: 6 more route tests (several products, all unavailable kinds and cross-shop in both directions, uninstalled/unknown shop, malformed and oversized lists, tampered/unsigned, shared rate limit). The single-product endpoint tests are unchanged and still pass
 
 Live dev-store checklist (needs a working tunnel; enter the storefront password first if the dev store is protected):
-- [ ] Theme editor → product template → Add block → Apps → **Product Badge** appears and can be added without editing theme code
+- [x] Theme editor → product template → Add block → Apps → **Product Badge** added without editing theme code
 - [ ] Each setting changes the preview: show/hide, alignment, style, text size, corner radius
-- [ ] ACTIVE badge: the product page shows the badge text in the chosen colour
+- [x] ACTIVE badge ("Limited Edition") shows on the product page (2026-09-22, after re-adding the block following the reinstall)
 - [ ] INACTIVE badge (untick Active in the app): nothing renders on the storefront within about 60s
 - [ ] MISSING badge: another product shows nothing; the theme editor shows the placeholder only
 - [ ] Browser network tab: the badge response holds only `text`, `color`, `textColor`
@@ -168,19 +169,27 @@ Automated (`tests/description-apply.integration.test.ts`, real routes + services
 
 Live dev-store checklist:
 - [x] Before the scopes were granted, the product page showed the "has not granted" warning and Apply was disabled (2026-09-22)
-- [x] Scopes granted (2026-09-22). What actually happened: `shopify app deploy` released version 5 with the new scopes, but opening the app did not prompt, and `shops.scopes` stayed `read_products` (the Render `SCOPES` variable also had to be updated, since `shopify.server.ts` reads it). Uninstall + reinstall showed the consent screen; `shops.scopes` is now `write_products,write_publications` (Shopify reports write scopes only; the read scopes are implied). Side effect: the reinstall broke the theme's reference to the Product Badge block ("not found" in the editor) and it had to be removed and re-added; badges are then shown again
-- [ ] Approve a draft → Apply to product… → the modal shows previous vs new → Apply → success banner, job APPLIED, Versions lists v1 (current); the description in Shopify admin matches
-- [ ] Edit the description in Shopify admin, then Apply another approved draft → "The product changed in Shopify" banner, nothing overwritten
-- [ ] Restore what it replaced → Shopify shows the original text; Versions shows a RESTORE row; Restore the AI text again works
-- [ ] Double-click Apply → one version row
-- [ ] Publish to a channel… → channel list loads; DRAFT product shows the warning and cannot publish; ACTIVE product publishes; `publication_actions` row SUCCEEDED; product visible on the Online Store
-- [ ] `curl` the API: apply (201), apply again (409), versions (list), restore (201), publish (200), all with `X-Request-Id`
+- [x] Scopes granted (2026-09-22): after `shopify app deploy` and updating the server's `SCOPES` variable, reopening the app did not prompt; uninstall + reinstall showed the consent screen. `shops.scopes` is now `write_products,write_publications` (read scopes implied). The reinstall broke the theme's reference to the Product Badge block; it was removed and re-added
+- [x] Approve → Apply to product… → confirmation → job #4 `APPLIED`, version #1 (`source AI`, `appliedBy admin:<shop>`), description visible in Shopify admin; the resulting `products/update` webhook was `PROCESSED` without re-writing the row (2026-09-22)
+- [ ] Stale conflict live (edit in Shopify admin, then Apply). Not exercised on the store; covered by automated tests (409, no mutation, job back to APPROVED)
+- [ ] Restore live. Not exercised on the store; covered by automated tests (RESTORE row, `previous` text, links)
+- [ ] Double-click Apply live. Covered by automated tests (two simultaneous → one write)
+- [ ] Publish live. Not exercised on the store (no `publication_actions` row); covered by automated tests (channel list, DRAFT refused, audit SUCCEEDED/FAILED)
+- [ ] API round-trip with `curl` against the deployed app. No API key was created on the deployed database; covered by the request tests
 
 ## AI description: security and reliability hardening
 
-Audit of the review document's list against the code (2026-09-22), each item with its evidence:
-- [x] Sanitizer on model output (`validateModelOutput`), on merchant edits (`saveDraftEdit`), and again before the mutation (`finalHtml` in `description-apply.server.ts`); property test proves the output holds only allowed attribute-less tags and sanitizing twice is a no-op
-- [x] Per-shop concurrency and daily limits counted from job rows under a shop-row lock (survive restarts); API bucket `generation` 10/min per key; NEW: admin write intents 10/min per shop (`admin-limits.server.ts`), tested: reads unaffected, other shops unaffected
-- [x] Logs: NEW value-level redaction (`Bearer`, `sk-…`, `shpat_…`, `eh_live_…`, `data:` URIs) and a 500-character cut at every depth; tests assert apply/publish lines carry identifiers only and that a credential under an innocent key is redacted. Provider client tests already assert no key, prompt, image URL or answer in logs
-- [x] Error envelopes: every AI route goes through `withGenerationErrors`; NEW: `ShopifyApiError` → 429 `shopify_throttled` (+ `Retry-After`) / 502 `shopify_unavailable` / 502 `shopify_error` / 409 `shop_session_unavailable` instead of 500, without Shopify's message text; the admin page gets the same sentence and a `SHOPIFY_<kind>` code, and Apply stays retryable
-- [x] Double-click and browser retry: generate = idempotency key (tested: 4 simultaneous identical requests → 1 job); apply = `APPROVED → APPLYING` conditional update (tested: 2 simultaneous → 1 write)
+Audit of the review list against the code, with evidence:
+- [x] Sanitizer on model output, on merchant edits and before the mutation (property test: only allowed attribute-less tags; idempotent)
+- [x] Concurrency and daily limits counted in MySQL under a shop-row lock; API bucket 10/min per key; admin write intents 10/min per shop (tested: reads and other shops unaffected)
+- [x] Logs: key-name and value-shape redaction, 500-character cut, at every depth; apply/publish lines carry identifiers only (tested with real redaction)
+- [x] Error envelopes: `ShopifyApiError` → 429/502/409 with codes instead of 500, without Shopify's text; admin page gets the same sentence and stays retryable
+- [x] Double click / browser retry: idempotency key on generate (4 simultaneous → 1 job), conditional `APPROVED → APPLYING` on apply (2 simultaneous → 1 write)
+
+## AI description: batch generation and worker
+
+- [x] `POST /api/v1/description-generations/batch` and *Generate descriptions for selected* on the Products list: one QUEUED job per product (max 20, first images up to `AI_MAX_IMAGES`), products without images reported as skipped, per-product idempotency key from the batch key, other shop's id refused before anything is created, daily limit stops the batch and keeps what was queued
+- [x] Worker in the web process (`startGenerationWorker`): leases with `FOR UPDATE SKIP LOCKED`, one RUNNING job per shop, drains due work each tick, leaves jobs younger than 5 s to their inline run, rebuilds the prompt from the stored input; tests cover order, concurrency, provider failure, and three concurrent workers never running the same job
+- [ ] Live: select 3 products → queued → drafts appear on each product page within a minute; restart the server with jobs queued → they still run
+
+Known limits: one lease at a time per process; a job mid-call during a restart is failed after 5 minutes; sync and webhooks are not on the worker.

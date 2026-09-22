@@ -216,6 +216,32 @@ export async function recoverAbandonedApplies(shopId: number, now = new Date(), 
   return count;
 }
 
+/**
+ * Worker lease: the oldest QUEUED job (older than `graceMs`, so a job whose creating request
+ * is about to run it inline is left alone) of a shop that has fewer than `maxRunningPerShop`
+ * RUNNING jobs, moved to RUNNING in the same transaction. `FOR UPDATE SKIP LOCKED` lets several
+ * worker loops (or processes) lease different rows without waiting on each other.
+ * Returns the job with its input, or null when nothing is due.
+ */
+export async function leaseQueuedJob(maxRunningPerShop: number, graceMs: number, now = new Date()) {
+  const cutoff = new Date(now.getTime() - graceMs);
+  return db.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ id: number; shopId: number }>>`
+      SELECT j.id, j.shopId FROM ai_generation_jobs j
+      WHERE j.status = 'QUEUED' AND j.createdAt < ${cutoff}
+        AND (SELECT COUNT(*) FROM ai_generation_jobs r WHERE r.shopId = j.shopId AND r.status = 'RUNNING') < ${maxRunningPerShop}
+      ORDER BY j.id ASC LIMIT 1 FOR UPDATE SKIP LOCKED`;
+    const row = rows[0];
+    if (!row) return null;
+    const { count } = await tx.aiGenerationJob.updateMany({
+      where: { id: row.id, status: "QUEUED" },
+      data: { status: "RUNNING", startedAt: now },
+    });
+    if (count !== 1) return null;
+    return tx.aiGenerationJob.findUnique({ where: { id: row.id }, include: { input: true } });
+  });
+}
+
 /** Save the merchant's (already sanitized) edit. Only while the job is a DRAFT. */
 export async function saveDraft(shopId: number, jobId: number, draftHtml: string) {
   const { count } = await db.aiGenerationJob.updateMany({

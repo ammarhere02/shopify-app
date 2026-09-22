@@ -6,6 +6,7 @@ Architecture note, database documentation, developer API reference and test evid
 2. [Database documentation](#2-database-documentation)
 3. [API documentation](#3-api-documentation)
 4. [Test evidence](#4-test-evidence)
+5. [AI description generator](#5-ai-description-generator)
 
 ---
 
@@ -296,6 +297,14 @@ Rate limits: 60 requests/min per key, 5 sync starts/min per key, 20 failed login
 | GET | `/api/v1/products/{productId}/description-generations` | The product's generations, newest first (max 20) | 200 | 401, 404 |
 | GET | `/api/v1/description-generations/{jobId}` | Status, draft, warnings, usage and error of one generation | 200 | 401, 404 |
 | POST | `/api/v1/description-generations/{jobId}/regenerate` | New generation linked to a previous one | 202 + `Location` / 200 | 401, 404, 409, 422, 429, 503 |
+| POST | `/api/v1/description-generations/batch` | Queue one generation per product (max 20); a worker runs them | 202 | 401, 404, 409, 422, 429, 503 |
+| POST | `/api/v1/description-generations/{jobId}/apply` | Write the approved draft to Shopify | 201 | 401, 403, 404, 409, 422, 429, 502 |
+| GET | `/api/v1/products/{productId}/description-versions` | Versions this app wrote, newest first | 200 | 401, 404 |
+| POST | `/api/v1/products/{productId}/description-versions/{versionId}/restore` | Write an earlier version back | 201 | 401, 403, 404, 422, 429, 502 |
+| GET | `/api/v1/products/{productId}/publish` | Sales channels with the product's state, publish history | 200 | 401, 403, 404, 502 |
+| POST | `/api/v1/products/{productId}/publish` | Publish to one sales channel | 200 | 401, 403, 404, 409, 422, 429, 502 |
+
+Machine-readable reference with schemas and examples: [openapi.yaml](openapi.yaml). Postman collection: [postman/enrichment-hub.postman_collection.json](postman/enrichment-hub.postman_collection.json).
 
 #### GET /api/v1/products
 
@@ -467,6 +476,45 @@ curl -X POST -H "Authorization: Bearer $KEY" -H "Idempotency-Key: 0b7c1d52-91aa-
 
 Success **202** (or **200** for a repeated key) with the new job. Common errors: **409** `invalid_state` while `{jobId}` is still running; **404**; **422**; **429**; **401**.
 
+#### POST /api/v1/description-generations/{jobId}/apply
+
+Purpose: write the APPROVED draft to Shopify with `productUpdate` (only `descriptionHtml`). The server re-reads the product first: a description changed since generation is refused. One version row is recorded with the text before and after; of two simultaneous calls exactly one writes.
+
+```bash
+curl -X POST -H "Authorization: Bearer $KEY" "$APP_URL/api/v1/description-generations/42/apply"
+```
+
+Success **201**:
+
+```json
+{ "data": { "id": 5, "generationId": 42, "source": "AI", "descriptionHtml": "<p>A merino beanie…</p>", "previousDescriptionHtml": "<p>Old text</p>", "restoredFromVersionId": null, "appliedBy": "api-key:eh_live_AbCd", "appliedAt": "2026-09-22T10:10:00.000Z", "shopifyUpdatedAt": "2026-09-22T10:09:59.000Z" } }
+```
+
+Common errors: **409** `invalid_state` (not approved, already applied, being applied) or `stale_product` (the job goes back to APPROVED with the reason and can be retried after a regeneration); **422** `shopify_rejected` with Shopify's `userErrors` keyed by field; **403** `missing_scope` when the shop has not granted `write_products`; **429** `shopify_throttled` with `Retry-After`; **502** `shopify_unavailable`; **404**; **401**.
+
+#### GET /api/v1/products/{productId}/description-versions · POST …/{versionId}/restore
+
+`GET` lists the versions this app wrote (newest first, max 20). `POST …/restore` writes an earlier version back through the same checks as Apply and appends a `RESTORE` row pointing at its source. Body optional: `{ "which": "written" }` (default, the text that version wrote) or `{ "which": "previous" }` (the text it replaced; on the oldest version that is the description before this app touched the product).
+
+```bash
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"which":"previous"}'   "$APP_URL/api/v1/products/8012345678901/description-versions/5/restore"
+```
+
+Success **201** with the new version (`source: "RESTORE"`, `restoredFromVersionId: 5`). Common errors: **404** (unknown, other shop, other product); **422** bad `which` or `shopify_rejected`; **403**; **502**; **401**.
+
+#### GET / POST /api/v1/products/{productId}/publish
+
+`GET` returns the shop's sales channels with the product's state on each and this app's publish history. `POST { "publicationId": "gid://shopify/Publication/11" }` publishes to that channel with `publishablePublish`. The product must be ACTIVE (a DRAFT product would be "published" but invisible, so it is refused with **409** before any call); the channel must be one of the shop's (**422** otherwise). Every attempt is an audited `publication_actions` row.
+
+```bash
+curl -H "Authorization: Bearer $KEY" "$APP_URL/api/v1/products/8012345678901/publish"
+# { "data": { "productStatus": "ACTIVE", "publications": [ { "id": "gid://shopify/Publication/11", "name": "Online Store", "published": false } ], "history": [] } }
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"publicationId":"gid://shopify/Publication/11"}'   "$APP_URL/api/v1/products/8012345678901/publish"
+# { "data": { "actionId": 3, "publicationId": "gid://shopify/Publication/11" } }
+```
+
+Common errors: **409** `invalid_state` (product not ACTIVE); **422** `validation_failed` or `shopify_rejected` (the audit row is `FAILED` with the `userErrors`); **403** `missing_scope` (`write_publications`); **502**; **404**; **401**.
+
 ### Postman screenshots
 
 Captured on 2026-09-20 against the real development store through the `shopify app dev` tunnel, authenticated with a Bearer API key (masked in Postman). The six requests form one round trip on the product "Gift Card" (`9494355902682`): read, add a badge, read it back, remove it, read again.
@@ -503,12 +551,12 @@ Not captured in Postman: `POST /api/v1/syncs`, `GET /api/v1/syncs/{id}` and the 
 
 ### Automated commands
 
-Run on 2026-09-20 against the current `main`. All six pass.
+Run on 2026-09-22 against the working tree. All six pass.
 
 | Command | Result |
 |---|---|
-| `npm test` | Pass. 7 test files, **57 tests passed** (Vitest, 0.8s) |
-| `npm run test:integration` | Pass. 5 test files, **64 tests passed** against real local MySQL (2.7s) |
+| `npm test` | Pass. 12 test files, **127 tests passed** (Vitest) |
+| `npm run test:integration` | Pass. 10 test files, **170 tests passed** against real local MySQL |
 | `npm run typecheck` | Pass. `react-router typegen && tsc --noEmit`, no errors |
 | `npm run lint` | Pass. ESLint, no errors or warnings |
 | `npm run build` | Pass. Client and server bundles built (`build/server/index.js` 96.54 kB) |
@@ -516,7 +564,8 @@ Run on 2026-09-20 against the current `main`. All six pass.
 
 ### What is real and what is mocked
 
-- **Automated Shopify GraphQL calls are mocked.** No automated test contacts Shopify. The sync and webhook tests feed canned GraphQL responses (pages, cursors, throttle metadata, errors) into the real client, mapping and service code. The three queries themselves were validated against the `2026-07` schema with the Shopify AI Toolkit and need only `read_products`.
+- **Automated Shopify GraphQL calls are mocked.** No automated test contacts Shopify. The sync and webhook tests feed canned GraphQL responses (pages, cursors, throttle metadata, errors) into the real client, mapping and service code; the apply/publish tests use a small in-memory product store so `productUpdate` and `publishablePublish` effects can be asserted. Every query and mutation was validated against the `2026-07` schema with the Shopify AI Toolkit.
+- **The model provider is mocked.** `OpenRouterClient` is an interface; tests inject a fake or a fake `fetch`. No automated test makes a billable call. Real OpenRouter calls were made only from the development store through the deployed app (Gemini 2.5 Flash, nex-n2.5-mini:free).
 - **Automated database tests use real local MySQL.** `npm run test:integration` runs against the Docker MySQL 8 instance, in a separate database whose name must end in `_test`. It applies the real migrations, exercises real transactions, row locks and unique constraints, and deletes only the fixture shops it created. It never touches the development database.
 - **Webhook and app-proxy signatures are tested using the real verification logic.** Route tests build requests signed with the app secret and send them through the framework's own `authenticate.webhook` and `authenticate.public.appProxy`. Valid, forged, tampered, unsigned and duplicate requests are covered: a forged webhook gets 401, a tampered or unsigned proxy request gets 400.
 - **Manual installation, sync, API, webhook, and storefront checks use the real Shopify development store**, reached through the `shopify app dev` tunnel.
@@ -530,6 +579,7 @@ What the automated suites cover:
 | Webhooks | 13 tests: pipeline and status codes | 18 tests: receipts, duplicates, re-claim of `FAILED`, newer-than guard, real-HMAC route requests |
 | Developer API | 5 tests | 21 request tests: auth failure, tenant scoping, valid write, invalid payload, missing product, rate limit, sync |
 | Storefront | Contrast ≥4.5:1 over thousands of colours | 10 route tests with a real proxy signature: active badge, every empty case including cross-shop, tampered/unsigned, 429, batch endpoint |
+| AI descriptions | Prompt boundary, schema validation, sanitizer (property test), claim detection, input hash, config, provider client (nine failure modes, no key in logs), state tables, mutation payload parsing, logger redaction, Shopify error mapping | Job idempotency and concurrency, limits, failure modes, request tests (401, other shop, oversized context, invalid media), apply (stale, double click, userErrors, transport, recovery, scope), restore, publish (scope, ACTIVE, audit), log content, admin rate limit |
 
 ### Manual checks on the development store
 
@@ -566,3 +616,84 @@ Status copied from the checklist in [VERIFICATION.md](VERIFICATION.md), which ho
 - [ ] Theme editor → product template → Add block → Apps → **Product Badge**, no theme code edited; each setting changes the preview
 - [ ] ACTIVE badge renders; INACTIVE and MISSING render nothing; response holds only `text`, `color`, `textColor`
 - [ ] Opening `/proxy/products/<id>` directly, without a signature, returns 400
+
+---
+
+## 5. AI description generator
+
+### Boundaries
+
+Two things are new compared with sections 1–3: the app now calls a **model provider** (OpenRouter) and now **writes** to Shopify. Both sit behind explicit, audited boundaries.
+
+![AI generation flow: merchant, route, generation service, OpenRouter, apply and publication services, Shopify Admin GraphQL, MySQL](diagrams/ai-generation.png)
+
+```mermaid
+flowchart LR
+  M[Merchant<br/>admin page or API key] -->|1 generate| R[route]
+  R -->|job row + idempotency key,<br/>202| DB[(MySQL)]
+  R -.->|unawaited run| G[generation service]
+  G -->|media ids → CDN URLs| GQL[Shopify Admin GraphQL]
+  G -->|text + image URLs,<br/>JSON schema| OR[OpenRouter<br/>allowlisted vision model]
+  OR -->|structured output| G
+  G -->|validate · sanitize · claim warnings<br/>raw + validated + usage| DB
+  M -->|2 poll, edit, approve| R
+  M -->|3 apply / restore| A[apply service]
+  A -->|scope check · live read ·<br/>stale hash check| GQL
+  A -->|productUpdate descriptionHtml| GQL
+  A -->|version row: before + after| DB
+  M -->|4 publish, confirmed| P[publication service]
+  P -->|ACTIVE? channel of this shop?| GQL
+  P -->|publishablePublish| GQL
+  P -->|publication_actions audit| DB
+```
+
+- **Untrusted in, validated out.** Product fields, merchant facts and image alt text enter the prompt as labelled data blocks; the model's answer is treated like a webhook body: JSON-schema validated, HTML-sanitized (allowlist, no attributes), scanned for unsupported claims, and shown to a person. Nothing reaches Shopify without Approve and a separate Apply confirmation.
+- **No client-supplied URLs.** Images are chosen by Shopify media id; the server resolves them against the product and sends Shopify's CDN URLs. No image bytes are stored.
+- **The write path is one function.** Apply and Restore share it: scope check → sanitize → live read and stale hash check → `productUpdate` outside any transaction → version row + state change in one transaction. `userErrors` are a 422 with field messages; transport failures leave the job retryable.
+- **Publish is separate and explicit**: selected channel, ACTIVE product, `write_publications`, confirmation, audit row before and after the call.
+- **Batches are rows, not promises.** A batch creates QUEUED jobs only; a worker loop in the web process leases them one per shop at a time (`FOR UPDATE SKIP LOCKED`) and runs the same generation code, so queued work survives restarts and the spend limits apply at run time.
+
+### Data model additions
+
+![ER diagram of the AI tables: jobs with write-once inputs and outputs, description versions with restore links, publication actions](diagrams/er-ai.png)
+
+| Table | Role | Key constraints |
+|---|---|---|
+| `ai_generation_jobs` | One attempt; the only mutable row (`status`, `reviewStatus`, `draftHtml`, `error`) | unique `(shopId, idempotencyKey)`; FK product; `previousJobId` links regenerations |
+| `ai_generation_inputs` | Exactly what was sent: media ids, product snapshot (incl. description hash and `updatedAt`), merchant context. Write-once | 1:1 job |
+| `ai_generation_outputs` | Raw and validated JSON, warnings, tokens, cost, generation id, latency. Write-once | 1:1 job |
+| `product_description_versions` | Append-only history of every write: text before and after, Shopify `updatedAt`, actor, `restoredFromId` | index `(shopId, productId, appliedAt)` |
+| `publication_actions` | Every publish attempt with Shopify's answer | index `(shopId, productId, requestedAt)` |
+
+State: job `QUEUED → RUNNING → SUCCEEDED | FAILED`; review `DRAFT → APPROVED | REJECTED`, `APPROVED → APPLYING → APPLIED` (`APPLYING → APPROVED` on refusal). Diagrams in [DESIGN.md, section 7](DESIGN.md#7-ai-product-description-generator).
+
+### Cost and privacy note
+
+| Topic | Choice |
+|---|---|
+| Model | Allowlist in `OPENROUTER_MODELS`; each must accept images and structured outputs, and `provider.require_parameters: true` stops OpenRouter routing to an endpoint that ignores the schema. Router models are refused so the answering model is always known. Development used `google/gemini-2.5-flash` and `nex-agi/nex-n2.5-mini:free` |
+| Provider routing and retention | `OPENROUTER_DATA_COLLECTION=deny` (default) restricts routing to providers that do not retain or train on prompts. Free endpoints usually require `allow`; that setting was used only with development-store data |
+| What leaves the server | Product title, vendor, type, tags, current description text, merchant facts, and up to four Shopify CDN image URLs (1024 px). Never the internal note, API keys, or any customer data |
+| What is stored | Snapshot, context, raw and validated output, usage. Never image bytes or the provider key. `raw_json` can be dropped later without affecting the workflow |
+| Token limits | `AI_MAX_OUTPUT_TOKENS` 1500; context ≤ 2000 characters; description HTML ≤ 10,000 characters; ≤ 4 images |
+| Spend limits | 1 concurrent and 50 generations per shop per 24 h, counted from rows; 10 starts/min per key or shop |
+| Measured cost | Every job stores `promptTokens`, `completionTokens`, `cost` (USD, from OpenRouter's usage accounting) and `latencyMs`, shown on the page. Gemini 2.5 Flash with two images: about 1,100–1,400 prompt tokens, 200–300 completion tokens, **$0.001–0.003 per generation**, 4–8 s. Free models: $0, but daily caps produce `RATE_LIMITED` failures |
+
+### Tool disclosure
+
+Built with Claude Code (Anthropic) as a pair-programming assistant: it drafted code, tests and documentation after the approach for each step was discussed and decided by the author; every change was reviewed and the five checks run locally. The Shopify AI Toolkit validated every GraphQL query and mutation against the `2026-07` schema. No generated code was accepted without tests.
+
+### Time spent
+
+| Work | Budget | Actual |
+|---|---|---|
+| Design and threat model | 1.5 h | 1.5 h |
+| Database and service skeleton | 2.5 h | 2.0 h |
+| Multimodal generation | 3.5 h | 3.5 h |
+| Merchant workflow | 3.0 h | 3.0 h |
+| Shopify write, publish, restore | 3.0 h | 3.0 h |
+| Security and reliability | 2.0 h | 1.5 h |
+| Tests and documentation | 2.5 h | 2.0 h |
+| **Total** | **18 h** | **16.5 h** |
+
+Not done, with next step: move single generations, apply, sync and webhooks onto the same worker (today only batches are queued; the others run in the request process and are recovered by timeout); `products/create` webhook; shared rate limiter; CI workflow.

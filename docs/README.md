@@ -5,6 +5,9 @@
 | [SUBMISSION.md](SUBMISSION.md) | Architecture note, database documentation, `/api/v1` endpoint reference, test evidence |
 | [DESIGN.md](DESIGN.md) | Design decisions, alternatives considered and known limits, by area of the application |
 | [VERIFICATION.md](VERIFICATION.md) | Implementation status against the assignment requirements, automated test results, development-store checklists |
+| [openapi.yaml](openapi.yaml) | OpenAPI 3.1 description of `/api/v1` with schemas and examples |
+| [postman/enrichment-hub.postman_collection.json](postman/enrichment-hub.postman_collection.json) | Postman collection for every endpoint (variables: `baseUrl`, `apiKey`, `productId`, …) |
+| [diagrams/](diagrams/) | Architecture and ER diagrams, the AI generation flow (`ai-generation.png`) and its tables (`er-ai.png`), with Mermaid sources |
 
 Folder-level documentation is in each folder's `README.md`.
 
@@ -18,7 +21,7 @@ Trust boundaries, data ownership and the request flows are described in [SUBMISS
 
 ![ER diagram: a shop owns products, sync runs, webhook receipts and API keys; a product has variants and at most one enrichment](diagrams/er-diagram.png)
 
-Tables, constraints, indexes and deletion rules are described in [SUBMISSION.md, section 2](SUBMISSION.md#2-database-documentation).
+Tables, constraints, indexes and deletion rules are described in [SUBMISSION.md, section 2](SUBMISSION.md#2-database-documentation). The AI description tables, the asynchronous generation flow and the Shopify write boundaries are in [SUBMISSION.md, section 5](SUBMISSION.md#5-ai-description-generator).
 
 ## Developer API evidence
 
