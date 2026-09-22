@@ -44,7 +44,7 @@ npm run setup                 # prisma generate + prisma migrate deploy
 npm run dev                   # shopify app dev
 ```
 
-1. `shopify.app.toml` references the author's app. Run `npm run config:link` to select or create your own, and confirm the scopes `read_products,write_products,read_publications,write_publications` and webhook API version `2026-07` are retained. A store that installed the app with `read_products` only is asked to approve the new scopes the next time the app is opened; until then Apply and Publish answer 403 and the product page says so.
+1. `shopify.app.toml` references the author's app. Run `npm run config:link` to select or create your own, and confirm the scopes `read_products,write_products,read_publications,write_publications` and webhook API version `2026-07` are retained. A store that installed the app with `read_products` only must grant the new scopes: `shopify app deploy` the config, set the same list in the `SCOPES` environment variable of the running server (it is what `app/shopify.server.ts` compares the session against), then reopen the app; if no consent screen appears, uninstall and reinstall the app on the store (data is kept; the Product Badge theme block must then be removed and re-added in the theme editor). Until then Apply and Publish answer 403 and the product page says so.
 2. `npm run dev` prompts for the development store, opens a tunnel and updates the application, redirect and app proxy URLs.
 3. Press `p` to open the app in the Shopify admin and install it.
 

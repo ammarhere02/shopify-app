@@ -4,7 +4,7 @@ import { unauthenticated } from "../shopify.server";
 import { ApiError } from "./api.server";
 import { GenerationError, createGenerationDeps } from "./description-generation.server";
 import type { GenerationDeps } from "./description-generation.server";
-import { createShopifyClient } from "../shopify/graphql-client.server";
+import { ShopifyApiError, createShopifyClient } from "../shopify/graphql-client.server";
 import type { ShopifyClient } from "../shopify/graphql-client.server";
 
 /** Glue between the generation services and the /api/v1 error envelope. */
@@ -19,6 +19,22 @@ const STATUS: Record<GenerationError["code"], [number, string]> = {
   FORBIDDEN: [403, "missing_scope"],
 };
 
+/**
+ * A Shopify failure is not our bug, so it is not a 500. The client learns which kind it was
+ * and whether to retry; Shopify's own message text stays in the server log, not the response.
+ */
+const SHOPIFY_STATUS: Record<ShopifyApiError["kind"], [number, string, string]> = {
+  THROTTLED: [429, "shopify_throttled", "Shopify is rate limiting this shop. Retry shortly."],
+  TRANSPORT: [502, "shopify_unavailable", "Shopify did not answer. Retry shortly."],
+  GRAPHQL: [502, "shopify_error", "Shopify rejected the request."],
+  AUTH: [409, "shop_session_unavailable", "No valid Shopify session for this shop. Open the app in Shopify admin, then retry."],
+};
+
+/** What the admin page shows for the same failures (same wording, no envelope). */
+export function shopifyErrorMessage(err: ShopifyApiError) {
+  return SHOPIFY_STATUS[err.kind][2];
+}
+
 export function toApiError(err: unknown): unknown {
   if (err instanceof GenerationError) {
     const [status, code] = STATUS[err.code];
@@ -26,6 +42,10 @@ export function toApiError(err: unknown): unknown {
   }
   if (err instanceof AiConfigError) {
     return new ApiError(503, "ai_not_configured", "AI generation is not configured on this server");
+  }
+  if (err instanceof ShopifyApiError) {
+    const [status, code, message] = SHOPIFY_STATUS[err.kind];
+    return new ApiError(status, code, message, undefined, err.kind === "THROTTLED" ? { "Retry-After": "5" } : undefined);
   }
   return err;
 }

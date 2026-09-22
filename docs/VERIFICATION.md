@@ -16,11 +16,12 @@ Legend: `[x]` verified · `[ ]` not verified yet
 | Storefront badge: app proxy and Theme App Extension | F-07, §4.6 | yes | yes | open |
 | Structured logs with correlation ids, no secrets | F-10 | yes | yes (log content asserted) | open |
 | AI description: generate, review, edit | AI 01–07 (extension) | yes | yes | partly done |
-| AI description: apply, publish, versions, restore | AI 08–12 (extension) | yes | yes | open |
+| AI description: apply, publish, versions, restore | AI 08–12 (extension) | yes | yes | partly done |
+| AI description: security and reliability hardening | §9, §12 (extension) | yes | yes | — |
 
 Not built: F-12 (metafield mutation, stretch), an admin page for API keys, ETag on the storefront endpoint. The architecture note, ER diagram, endpoint reference and test evidence are in [SUBMISSION.md](SUBMISSION.md). Submission documents still to write: OpenAPI file, demo.
 
-Automated checks, all passing: `npm test` (116), `npm run test:integration` (157, real MySQL), `npm run typecheck`, `npm run lint`, `npm run build`, `npx shopify theme check --path extensions/product-badge`. Shopify is mocked in automated tests; request signatures (webhook HMAC, app proxy) are real.
+Automated checks, all passing: `npm test` (127), `npm run test:integration` (161, real MySQL), `npm run typecheck`, `npm run lint`, `npm run build`, `npx shopify theme check --path extensions/product-badge`. Shopify is mocked in automated tests; request signatures (webhook HMAC, app proxy) are real.
 
 ---
 
@@ -166,11 +167,20 @@ Automated (`tests/description-apply.integration.test.ts`, real routes + services
 - [x] Mutations and the publications query validated with the Shopify AI Toolkit against 2026-07 (scopes `write_products`, `write_publications`, `read_publications`)
 
 Live dev-store checklist:
-- [ ] Deploy the new scopes (`shopify app deploy`), open the app → Shopify asks to approve `write_products` / `write_publications`; `shops.scopes` updated (`app/scopes_update` receipt present)
-- [ ] Before approving: the product page shows the "has not granted" warning and Apply is disabled
+- [x] Before the scopes were granted, the product page showed the "has not granted" warning and Apply was disabled (2026-09-22)
+- [x] Scopes granted (2026-09-22). What actually happened: `shopify app deploy` released version 5 with the new scopes, but opening the app did not prompt, and `shops.scopes` stayed `read_products` (the Render `SCOPES` variable also had to be updated, since `shopify.server.ts` reads it). Uninstall + reinstall showed the consent screen; `shops.scopes` is now `write_products,write_publications` (Shopify reports write scopes only; the read scopes are implied). Side effect: the reinstall broke the theme's reference to the Product Badge block ("not found" in the editor) and it had to be removed and re-added; badges are then shown again
 - [ ] Approve a draft → Apply to product… → the modal shows previous vs new → Apply → success banner, job APPLIED, Versions lists v1 (current); the description in Shopify admin matches
 - [ ] Edit the description in Shopify admin, then Apply another approved draft → "The product changed in Shopify" banner, nothing overwritten
 - [ ] Restore what it replaced → Shopify shows the original text; Versions shows a RESTORE row; Restore the AI text again works
 - [ ] Double-click Apply → one version row
 - [ ] Publish to a channel… → channel list loads; DRAFT product shows the warning and cannot publish; ACTIVE product publishes; `publication_actions` row SUCCEEDED; product visible on the Online Store
 - [ ] `curl` the API: apply (201), apply again (409), versions (list), restore (201), publish (200), all with `X-Request-Id`
+
+## AI description: security and reliability hardening
+
+Audit of the review document's list against the code (2026-09-22), each item with its evidence:
+- [x] Sanitizer on model output (`validateModelOutput`), on merchant edits (`saveDraftEdit`), and again before the mutation (`finalHtml` in `description-apply.server.ts`); property test proves the output holds only allowed attribute-less tags and sanitizing twice is a no-op
+- [x] Per-shop concurrency and daily limits counted from job rows under a shop-row lock (survive restarts); API bucket `generation` 10/min per key; NEW: admin write intents 10/min per shop (`admin-limits.server.ts`), tested: reads unaffected, other shops unaffected
+- [x] Logs: NEW value-level redaction (`Bearer`, `sk-…`, `shpat_…`, `eh_live_…`, `data:` URIs) and a 500-character cut at every depth; tests assert apply/publish lines carry identifiers only and that a credential under an innocent key is redacted. Provider client tests already assert no key, prompt, image URL or answer in logs
+- [x] Error envelopes: every AI route goes through `withGenerationErrors`; NEW: `ShopifyApiError` → 429 `shopify_throttled` (+ `Retry-After`) / 502 `shopify_unavailable` / 502 `shopify_error` / 409 `shop_session_unavailable` instead of 500, without Shopify's message text; the admin page gets the same sentence and a `SHOPIFY_<kind>` code, and Apply stays retryable
+- [x] Double-click and browser retry: generate = idempotency key (tested: 4 simultaneous identical requests → 1 job); apply = `APPROVED → APPLYING` conditional update (tested: 2 simultaneous → 1 write)

@@ -7,9 +7,13 @@ const { adminMock, authAdminMock, generateMock } = vi.hoisted(() => ({
   authAdminMock: vi.fn(),
   generateMock: vi.fn(),
 }));
-vi.mock("../app/lib/logger.server", () => {
-  const noop = () => undefined;
-  return { logger: { info: noop, warn: noop, error: noop } };
+const logLines: Array<{ level: string; event: string; fields: Record<string, unknown> }> = [];
+vi.mock("../app/lib/logger.server", async (original) => {
+  const real = await original<typeof import("../app/lib/logger.server")>();
+  // Keep the real redaction, capture the result instead of printing it.
+  const capture = (level: string) => (event: string, fields: Record<string, unknown> = {}) =>
+    logLines.push({ level, event, fields: real.redactForTests(fields) });
+  return { ...real, logger: { info: capture("info"), warn: capture("warn"), error: capture("error") } };
 });
 vi.mock("../app/shopify.server", () => ({
   unauthenticated: { admin: adminMock },
@@ -23,6 +27,7 @@ vi.mock("../app/ai/openrouter-client.server", async (original) => ({
 import db from "../app/db.server";
 import { createApiKey } from "../app/services/api-key.server";
 import { resetRateLimitsForTests } from "../app/services/api.server";
+import { resetAdminLimitsForTests } from "../app/services/admin-limits.server";
 import { APPLY_ABANDON_MS } from "../app/services/generation-state";
 import * as createRoute from "../app/routes/api.v1.products.$id.description-generations";
 import * as jobRoute from "../app/routes/api.v1.description-generations.$jobId";
@@ -74,7 +79,7 @@ const graphql = vi.fn(async (doc: string, opts?: { variables?: Record<string, un
   }
   if (doc.includes("mutation ProductDescriptionUpdate")) {
     calls.push("update");
-    if (updateFailure) return updateFailure;
+    if (updateFailure) return updateFailure.clone();
     const input = vars.product as { id: string; descriptionHtml: string };
     if (updateUserErrors.length) return reply({ productUpdate: { product: null, userErrors: updateUserErrors } });
     const r = remoteOf(input.id);
@@ -164,6 +169,8 @@ const approvedJob = async (product = productA, key = keyA) => {
 
 beforeEach(async () => {
   resetRateLimitsForTests();
+  resetAdminLimitsForTests();
+  logLines.length = 0;
   graphql.mockClear();
   calls.length = 0;
   remote.clear();
@@ -257,10 +264,13 @@ describe("POST /api/v1/description-generations/{id}/apply", () => {
     expect(await db.productDescriptionVersion.count({ where: { jobId } })).toBe(0);
   });
 
-  it("a transport failure returns 500, leaves no version, and Apply can be retried", async () => {
+  it("a transport failure returns 502 shopify_unavailable, leaves no version, and Apply can be retried", async () => {
     const jobId = await approvedJob();
     updateFailure = new Response("nope", { status: 500 });
-    expect((await apply(jobId)).status).toBe(500);
+    const res = await apply(jobId);
+    expect(res.status).toBe(502);
+    expect((await res.json()).error.code).toBe("shopify_unavailable");
+    expect(await db.productDescriptionVersion.count({ where: { jobId } })).toBe(0);
     expect(await db.aiGenerationJob.findUnique({ where: { id: jobId } })).toMatchObject({ reviewStatus: "APPROVED" });
     updateFailure = null;
     expect((await apply(jobId)).status).toBe(201);
@@ -402,5 +412,67 @@ describe("admin resource route", () => {
     const jobId = await approvedJob();
     remoteOf(productA.gid).descriptionHtml = "<p>changed</p>";
     expect(await act({ intent: "apply", jobId: String(jobId) })).toMatchObject({ ok: false, code: "STALE" });
+  });
+});
+
+describe("hardening", () => {
+  const act = (fields: Record<string, string>, productId = productA.local) => {
+    const data = new FormData();
+    for (const [k, v] of Object.entries(fields)) data.set(k, v);
+    return adminRoute.action({
+      request: new Request(`https://app.example.test/app/products/${productId}/generation`, { method: "POST", body: data }),
+      params: { id: String(productId) },
+      context: {},
+    } as never);
+  };
+
+  it("logs only identifiers for apply and publish: no HTML, no key, no auth header", async () => {
+    const jobId = await approvedJob();
+    await apply(jobId);
+    await publish({ publicationId: PUB_ONLINE });
+    const mine = logLines.filter((l) => ["ai.applied", "publish.succeeded", "api.request"].includes(l.event));
+    expect(mine.map((l) => l.event)).toEqual(expect.arrayContaining(["ai.applied", "publish.succeeded"]));
+    const text = JSON.stringify(logLines);
+    expect(text).not.toMatch(/<p>|New AI text|Bearer|eh_live_|authorization/i);
+    const applied = logLines.find((l) => l.event === "ai.applied")!;
+    expect(Object.keys(applied.fields).sort()).toEqual(["jobId", "length", "productId", "shopId", "versionId"]);
+  });
+
+  it("a Shopify throttle on apply is 429 shopify_throttled with Retry-After, not a 500; the job stays retryable", async () => {
+    const jobId = await approvedJob();
+    updateFailure = new Response(JSON.stringify({ errors: [{ message: "Throttled", extensions: { code: "THROTTLED" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    const res = await apply(jobId);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("5");
+    expect((await res.json()).error).toMatchObject({ code: "shopify_throttled" });
+    expect(await db.aiGenerationJob.findUnique({ where: { id: jobId } })).toMatchObject({ reviewStatus: "APPROVED" });
+    updateFailure = null;
+  });
+
+  it("the admin page gets a plain message and a SHOPIFY_* code for the same failure, and can retry", async () => {
+    authAdminMock.mockImplementation(async () => ({ session: { shop: shopA.shopDomain }, admin: { graphql } }));
+    const jobId = await approvedJob();
+    updateFailure = new Response("bad gateway", { status: 502 });
+    const failed = await act({ intent: "apply", jobId: String(jobId) });
+    expect(failed).toMatchObject({ ok: false, code: "SHOPIFY_TRANSPORT", message: expect.stringMatching(/Retry shortly/) });
+    expect(JSON.stringify(failed)).not.toMatch(/bad gateway|HTTP 502/);
+    updateFailure = null;
+    expect(await act({ intent: "apply", jobId: String(jobId) })).toMatchObject({ ok: true, job: { reviewStatus: "APPLIED" } });
+  });
+
+  it("limits write intents on the admin page per shop (10/min), not reads, and not other shops", async () => {
+    authAdminMock.mockImplementation(async () => ({ session: { shop: shopA.shopDomain }, admin: { graphql } }));
+    const jobId = await approvedJob();
+    // approvedJob() went through the API bucket; the admin bucket starts empty here.
+    const results: Array<{ ok: boolean; code?: string }> = [];
+    for (let i = 0; i < 11; i++) results.push((await act({ intent: "publish", publicationId: PUB_ONLINE })) as never);
+    expect(results.filter((r) => r.ok)).toHaveLength(10);
+    expect(results.at(-1)).toMatchObject({ ok: false, code: "RATE_LIMITED", message: expect.stringMatching(/Try again in \d+ seconds/) });
+    // Reads keep working while limited.
+    expect(await act({ intent: "reopen", jobId: String(jobId) })).toMatchObject({ ok: true, job: { reviewStatus: "DRAFT" } });
+    // Another shop has its own bucket.
+    authAdminMock.mockImplementation(async () => ({ session: { shop: shopB.shopDomain }, admin: { graphql } }));
+    const productB = await makeProduct(shopB);
+    expect(await act({ intent: "publish", publicationId: PUB_ONLINE }, productB.local)).toMatchObject({ ok: true });
   });
 });

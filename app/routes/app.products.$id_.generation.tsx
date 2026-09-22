@@ -19,12 +19,16 @@ import { serializeGeneration } from "../services/generation-view";
 import type { GenerationView } from "../services/generation-view";
 import { listPublications, publishProduct } from "../services/publication.server";
 import type { PublicationChoice } from "../services/publication.server";
+import { adminWriteLimiter } from "../services/admin-limits.server";
 import { requireActiveShop } from "../services/shop.server";
-import { createShopifyClient } from "../shopify/graphql-client.server";
+import { ShopifyApiError, createShopifyClient } from "../shopify/graphql-client.server";
+import { shopifyErrorMessage } from "../services/generation-api.server";
 import { authenticate } from "../shopify.server";
 
 // Resource route behind the AI Description section of the product page (no UI of its own).
 // The trailing underscore in the file name keeps it out of the product page's layout.
+
+const WRITE_INTENTS = new Set(["generate", "regenerate", "apply", "restore", "publish"]);
 
 function parseId(raw: unknown) {
   const id = Number(raw);
@@ -54,6 +58,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs): Promise<G
       return await listPublications({ shopify }, shop, productId);
     } catch (err) {
       if (err instanceof GenerationError) return { publicationsError: err.message };
+      if (err instanceof ShopifyApiError) return { publicationsError: shopifyErrorMessage(err) };
       throw err;
     }
   }
@@ -75,6 +80,16 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<G
   // Audit column for writes to Shopify. Sessions are offline (no staff identity), so the
   // most precise value available is "someone in this shop's admin".
   const actor = `admin:${session.shop}`;
+
+  // Session auth has no per-key bucket like /api/v1, so the costly or Shopify-writing intents
+  // get a per-shop limit here. Reads (saveDraft, approve, ...) are not limited.
+  if (WRITE_INTENTS.has(intent)) {
+    const hit = adminWriteLimiter.hit(String(shop.id));
+    if (!hit.allowed) {
+      logger.warn("ai.admin_rate_limited", { shopId: shop.id, productId, intent, retryAfterSec: hit.retryAfterSec });
+      return { ok: false, message: `Too many requests. Try again in ${hit.retryAfterSec} seconds.`, errors: {}, code: "RATE_LIMITED" };
+    }
+  }
 
   try {
     if (intent === "apply" || intent === "restore" || intent === "publish") {
@@ -138,6 +153,11 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<G
     if (err instanceof AiConfigError) {
       logger.warn("ai.not_configured", { shopId: shop.id, message: err.message });
       return { ok: false, message: "AI generation is not configured on this server.", errors: {} };
+    }
+    if (err instanceof ShopifyApiError) {
+      // Shopify's own message stays in the log; the merchant gets a plain sentence and can retry.
+      logger.warn("ai.shopify_failed", { shopId: shop.id, productId, intent, kind: err.kind, message: err.message });
+      return { ok: false, message: shopifyErrorMessage(err), errors: {}, code: `SHOPIFY_${err.kind}` };
     }
     throw err;
   }

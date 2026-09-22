@@ -22,7 +22,7 @@ Merchant Product Enrichment Hub. What is built and verified: `docs/VERIFICATION.
 | `shopify/` | Admin GraphQL queries and the retrying client. See `shopify/README.md` |
 | `components/` | React components shared by pages. See `components/README.md` |
 | `ai/` | OpenRouter configuration and the provider client contract. See `ai/README.md` |
-| `lib/logger.server.ts` | JSON logger `logger.info|warn|error(event, fields)`. Redacts top-level keys matching token/secret/authorization/password/api key/cookie. Use it instead of `console.log` |
+| `lib/logger.server.ts` | JSON logger `logger.info|warn|error(event, fields)`. Redacts at every depth: keys matching token/secret/authorization/password/api key/cookie, and string VALUES that look like credentials (`Bearer …`, `sk-…`, `shpat_…`, `eh_live_…`) or `data:` URIs; strings are cut at 500 characters so a prompt, HTML body or image can never be logged whole. `redactForTests` exposes the result. Use it instead of `console.log` |
 | `lib/rate-limit.server.ts` | `createRateLimiter({ limit, windowMs })` → `hit(key)`, `blocked(key)`. In-memory fixed window, one process only |
 | `lib/badge-contrast.ts` | `readableTextColor(hex)` → black or white text with at least 4.5:1 contrast. Pure |
 | `lib/product-status.ts` | `PRODUCT_STATUSES` (ACTIVE, DRAFT, ARCHIVED). Not `.server` because the UI imports it |
