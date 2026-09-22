@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  APPLY_ABANDON_MS,
   JOB_ABANDON_MS,
+  canApply,
   canEditDraft,
   canHaveReview,
   canMoveJob,
   canMoveReview,
   isAbandoned,
+  isApplyAbandoned,
 } from "../app/services/generation-state";
+import { ShopifyUserErrors, requireNoUserErrors } from "../app/shopify/mutations";
 import { hashGenerationInput, stableStringify } from "../app/services/input-hash.server";
 import { AiConfigError, loadAiConfig, resolveModel } from "../app/ai/config.server";
 
@@ -28,23 +32,45 @@ describe("job status transitions", () => {
 });
 
 describe("review status transitions", () => {
-  it("needs approval before apply", () => {
+  it("needs approval before apply, and passes through APPLYING", () => {
     expect(canMoveReview("DRAFT", "APPROVED")).toBe(true);
-    expect(canMoveReview("APPROVED", "APPLIED")).toBe(true);
+    expect(canMoveReview("APPROVED", "APPLYING")).toBe(true);
+    expect(canMoveReview("APPLYING", "APPLIED")).toBe(true);
+    expect(canMoveReview("APPROVED", "APPLIED")).toBe(false); // never without the in-flight state
     expect(canMoveReview("DRAFT", "APPLIED")).toBe(false);
+    expect(canMoveReview("DRAFT", "APPLYING")).toBe(false);
   });
 
-  it("returns to DRAFT only from APPROVED (refused write)", () => {
+  it("returns to DRAFT only from APPROVED (edit again), to APPROVED only from APPLYING (refused write)", () => {
     expect(canMoveReview("APPROVED", "DRAFT")).toBe(true);
+    expect(canMoveReview("APPLYING", "APPROVED")).toBe(true);
+    expect(canMoveReview("APPLYING", "DRAFT")).toBe(false);
     expect(canMoveReview("REJECTED", "DRAFT")).toBe(false);
     expect(canMoveReview("APPLIED", "DRAFT")).toBe(false);
   });
 
   it("treats REJECTED and APPLIED as final", () => {
-    for (const to of ["DRAFT", "APPROVED", "REJECTED", "APPLIED"] as const) {
+    for (const to of ["DRAFT", "APPROVED", "REJECTED", "APPLYING", "APPLIED"] as const) {
       expect(canMoveReview("REJECTED", to)).toBe(false);
       expect(canMoveReview("APPLIED", to)).toBe(false);
     }
+  });
+
+  it("canApply: only a finished job whose draft is approved", () => {
+    expect(canApply("SUCCEEDED", "APPROVED")).toBe(true);
+    expect(canApply("SUCCEEDED", "DRAFT")).toBe(false);
+    expect(canApply("SUCCEEDED", "APPLIED")).toBe(false);
+    expect(canApply("RUNNING", "APPROVED")).toBe(false);
+    expect(canApply("FAILED", null)).toBe(false);
+  });
+
+  it("isApplyAbandoned: only APPLYING, only after the window", () => {
+    const now = new Date("2026-09-22T12:00:00Z");
+    const old = new Date(now.getTime() - APPLY_ABANDON_MS - 1);
+    expect(isApplyAbandoned({ reviewStatus: "APPLYING", reviewedAt: old }, now)).toBe(true);
+    expect(isApplyAbandoned({ reviewStatus: "APPLYING", reviewedAt: now }, now)).toBe(false);
+    expect(isApplyAbandoned({ reviewStatus: "APPROVED", reviewedAt: old }, now)).toBe(false);
+    expect(isApplyAbandoned({ reviewStatus: "APPLYING", reviewedAt: null }, now)).toBe(false);
   });
 
   it("gives a review only to a SUCCEEDED job, edits only to a DRAFT", () => {
@@ -161,5 +187,26 @@ describe("AI configuration", () => {
     expect(resolveModel(config)).toBe("vendor/a");
     expect(resolveModel(config, "vendor/b")).toBe("vendor/b");
     expect(() => resolveModel(config, "vendor/expensive")).toThrow(AiConfigError);
+  });
+});
+
+describe("mutation payloads", () => {
+  it("returns the payload when userErrors is empty", () => {
+    const payload = { product: { id: "gid://shopify/Product/1" }, userErrors: [] };
+    expect(requireNoUserErrors("productUpdate", payload)).toBe(payload);
+  });
+
+  it("throws ShopifyUserErrors with every message, and for a missing payload", () => {
+    const errors = [{ field: ["descriptionHtml"], message: "is too long" }, { field: null, message: "Access denied" }];
+    let caught: unknown;
+    try {
+      requireNoUserErrors("productUpdate", { userErrors: errors });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ShopifyUserErrors);
+    expect((caught as ShopifyUserErrors).userErrors).toEqual(errors);
+    expect((caught as Error).message).toBe("productUpdate: is too long; Access denied");
+    expect(() => requireNoUserErrors("productUpdate", null)).toThrow(ShopifyUserErrors);
   });
 });

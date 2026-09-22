@@ -45,6 +45,15 @@ export async function requireActiveShop(shop: string) {
   return record;
 }
 
+/**
+ * Whether the shop has granted a scope. `shops.scopes` is what the merchant approved
+ * (kept fresh by afterAuth and the app/scopes_update webhook), not what the toml asks for:
+ * a shop installed before a scope was added has not granted it until it re-approves.
+ */
+export function hasScope(scopes: string | null | undefined, scope: string) {
+  return (scopes ?? "").split(",").map((s) => s.trim()).includes(scope);
+}
+
 /** Called from the app/scopes_update webhook when the merchant's granted scopes change. */
 export async function recordScopesUpdate(shop: string, scopes: string[]) {
   await db.shop.updateMany({

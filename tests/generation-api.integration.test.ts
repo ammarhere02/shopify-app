@@ -370,9 +370,17 @@ describe("admin page route (session instead of API key)", () => {
       params: { id: String(productId) },
       context: {},
     } as never);
+  /** Narrow an action result to its job: the intents used here always return one. */
+  const jobOf = (result: Awaited<ReturnType<typeof act>>) => {
+    if (!result.ok) throw new Error(result.message);
+    if (!result.job) throw new Error("no job in result");
+    return result.job;
+  };
   const finished = async (productId: number, jobId: number) => {
     for (let i = 0; i < 100; i++) {
-      const { job } = await load(productId, jobId);
+      const data = await load(productId, jobId);
+      if (!("job" in data)) throw new Error("expected a job");
+      const { job } = data;
       if (job.status === "SUCCEEDED" || job.status === "FAILED") return job;
       await new Promise((r) => setTimeout(r, 20));
     }
@@ -386,14 +394,13 @@ describe("admin page route (session instead of API key)", () => {
 
   it("generate → poll → edit (sanitized) → approve → reopen → reject", async () => {
     const started = await act(productA.local, { intent: "generate", idempotencyKey: randomUUID(), mediaIds: [IMG1, IMG2], merchantContext: "For skiers" });
-    if (!started.ok) throw new Error(started.message);
-    const jobId = started.job.id;
+    const jobId = jobOf(started).id;
     expect(await finished(productA.local, jobId)).toMatchObject({ status: "SUCCEEDED", reviewStatus: "DRAFT", draftHtml: "<p>A warm beanie.</p>" });
 
     const saved = await act(productA.local, { intent: "saveDraft", jobId: String(jobId), descriptionHtml: '<p>Edited</p><img src=x onerror=alert(1)><a href="https://x.test">link</a>' });
     expect(saved).toMatchObject({ ok: true, job: { draftHtml: "<p>Edited</p>link", reviewStatus: "DRAFT" } });
     // The model's own text is untouched by the edit.
-    expect(saved.ok && saved.job.generated?.descriptionHtml).toBe("<p>A warm beanie.</p>");
+    expect(jobOf(saved).generated?.descriptionHtml).toBe("<p>A warm beanie.</p>");
 
     const approved = await act(productA.local, { intent: "approve", jobId: String(jobId), descriptionHtml: "<p>Final text</p>" });
     expect(approved).toMatchObject({ ok: true, job: { reviewStatus: "APPROVED", draftHtml: "<p>Final text</p>" } });
@@ -408,25 +415,23 @@ describe("admin page route (session instead of API key)", () => {
   it("returns field errors instead of throwing, and rejects an empty or oversized draft", async () => {
     expect(await act(productA.local, { intent: "generate", idempotencyKey: randomUUID() })).toMatchObject({ ok: false, errors: { mediaIds: expect.any(String) } });
 
-    const started = await act(productA.local, { intent: "generate", idempotencyKey: randomUUID(), mediaIds: [IMG1] });
-    if (!started.ok) throw new Error(started.message);
-    await finished(productA.local, started.job.id);
-    const jobId = String(started.job.id);
+    const started = jobOf(await act(productA.local, { intent: "generate", idempotencyKey: randomUUID(), mediaIds: [IMG1] }));
+    await finished(productA.local, started.id);
+    const jobId = String(started.id);
     expect(await act(productA.local, { intent: "saveDraft", jobId, descriptionHtml: "<script>x</script>" })).toMatchObject({ ok: false, errors: { descriptionHtml: "The description is empty" } });
     expect(await act(productA.local, { intent: "saveDraft", jobId, descriptionHtml: "x".repeat(10_001) })).toMatchObject({ ok: false, errors: { descriptionHtml: expect.stringMatching(/at most/) } });
   });
 
   it("cannot reach another shop's job, or a job through the wrong product", async () => {
-    const started = await act(productA.local, { intent: "generate", idempotencyKey: randomUUID(), mediaIds: [IMG1] });
-    if (!started.ok) throw new Error(started.message);
-    await finished(productA.local, started.job.id);
+    const started = jobOf(await act(productA.local, { intent: "generate", idempotencyKey: randomUUID(), mediaIds: [IMG1] }));
+    await finished(productA.local, started.id);
     const otherProduct = await makeProduct(shopA);
-    expect(await act(otherProduct.local, { intent: "reject", jobId: String(started.job.id) })).toMatchObject({ ok: false, message: "Generation not found" });
-    await expect(load(otherProduct.local, started.job.id)).rejects.toMatchObject({ status: 404 });
+    expect(await act(otherProduct.local, { intent: "reject", jobId: String(started.id) })).toMatchObject({ ok: false, message: "Generation not found" });
+    await expect(load(otherProduct.local, started.id)).rejects.toMatchObject({ status: 404 });
 
     authAdminMock.mockImplementation(async () => ({ session: { shop: shopB.shopDomain }, admin: { graphql } }));
-    expect(await act(productB.local, { intent: "reject", jobId: String(started.job.id) })).toMatchObject({ ok: false, message: "Generation not found" });
-    await expect(load(productA.local, started.job.id)).rejects.toMatchObject({ status: 404 });
+    expect(await act(productB.local, { intent: "reject", jobId: String(started.id) })).toMatchObject({ ok: false, message: "Generation not found" });
+    await expect(load(productA.local, started.id)).rejects.toMatchObject({ status: 404 });
   });
 
   it("says so when the server is not configured, without an error page", async () => {

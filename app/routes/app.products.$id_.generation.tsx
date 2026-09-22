@@ -7,10 +7,20 @@ import {
   createGenerationDeps,
   startGeneration,
 } from "../services/description-generation.server";
+import {
+  applyGeneration,
+  listDescriptionVersions,
+  restoreVersion,
+  serializeVersion,
+} from "../services/description-apply.server";
+import type { VersionView } from "../services/description-apply.server";
 import { regenerate, reviewDraft, saveDraftEdit } from "../services/description-review.server";
 import { serializeGeneration } from "../services/generation-view";
 import type { GenerationView } from "../services/generation-view";
+import { listPublications, publishProduct } from "../services/publication.server";
+import type { PublicationChoice } from "../services/publication.server";
 import { requireActiveShop } from "../services/shop.server";
+import { createShopifyClient } from "../shopify/graphql-client.server";
 import { authenticate } from "../shopify.server";
 
 // Resource route behind the AI Description section of the product page (no UI of its own).
@@ -23,15 +33,31 @@ function parseId(raw: unknown) {
 }
 
 export type GenerationActionResult =
-  | { ok: true; message: string; job: GenerationView }
-  | { ok: false; message: string; errors: Record<string, string> };
+  | { ok: true; message: string; job: GenerationView | null; versions?: VersionView[]; published?: { publicationId: string } }
+  | { ok: false; message: string; errors: Record<string, string>; code?: string };
+
+export type GenerationLoaderData =
+  | { job: GenerationView }
+  | { publications: PublicationChoice[]; productStatus: string }
+  | { publicationsError: string };
 
 // GET ?jobId=<id>: the page polls this while a job is QUEUED or RUNNING. A plain read.
-export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+// GET ?publications=1: sales channels for the Publish dialog (a live Shopify read).
+export const loader = async ({ request, params }: LoaderFunctionArgs): Promise<GenerationLoaderData> => {
+  const { session, admin } = await authenticate.admin(request);
   const shop = await requireActiveShop(session.shop);
   const productId = parseId(params.id);
-  const job = await getJob(shop.id, parseId(new URL(request.url).searchParams.get("jobId")));
+  const url = new URL(request.url);
+  if (url.searchParams.get("publications")) {
+    try {
+      const shopify = createShopifyClient(admin.graphql, { logContext: { shopId: shop.id, productId } });
+      return await listPublications({ shopify }, shop, productId);
+    } catch (err) {
+      if (err instanceof GenerationError) return { publicationsError: err.message };
+      throw err;
+    }
+  }
+  const job = await getJob(shop.id, parseId(url.searchParams.get("jobId")));
   if (!job || job.productId !== productId) throw new Response("Not found", { status: 404 });
   return { job: serializeGeneration(job) };
 };
@@ -46,8 +72,32 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<G
     const value = form.get(name);
     return typeof value === "string" ? value : "";
   };
+  // Audit column for writes to Shopify. Sessions are offline (no staff identity), so the
+  // most precise value available is "someone in this shop's admin".
+  const actor = `admin:${session.shop}`;
 
   try {
+    if (intent === "apply" || intent === "restore" || intent === "publish") {
+      const shopify = createShopifyClient(admin.graphql, { logContext: { shopId: shop.id, productId } });
+      if (intent === "publish") {
+        const published = await publishProduct({ shopify }, shop, productId, form.get("publicationId"), actor);
+        return { ok: true, message: "Product published to the sales channel.", job: null, published };
+      }
+      if (intent === "apply") {
+        const jobId = await ownJobId(shop.id, productId, form.get("jobId"));
+        await applyGeneration({ shopify }, shop, jobId, actor);
+        return done(shop.id, jobId, "Description written to Shopify.", productId);
+      }
+      const which = text("which") === "previous" ? "previous" : "written";
+      await restoreVersion({ shopify }, shop, productId, parseId(form.get("versionId")), which, actor);
+      return {
+        ok: true,
+        message: "Previous description restored in Shopify.",
+        job: null,
+        versions: (await listDescriptionVersions(shop.id, productId)).map(serializeVersion),
+      };
+    }
+
     if (intent === "generate" || intent === "regenerate") {
       const deps = createGenerationDeps(admin.graphql, { shopId: shop.id, productId });
       const common = {
@@ -83,7 +133,7 @@ export const action = async ({ request, params }: ActionFunctionArgs): Promise<G
     throw new Response("Unknown intent", { status: 400 });
   } catch (err) {
     if (err instanceof GenerationError) {
-      return { ok: false, message: err.message, errors: err.details ?? {} };
+      return { ok: false, message: err.message, errors: err.details ?? {}, code: err.code };
     }
     if (err instanceof AiConfigError) {
       logger.warn("ai.not_configured", { shopId: shop.id, message: err.message });
@@ -100,7 +150,8 @@ async function ownJobId(shopId: number, productId: number, raw: FormDataEntryVal
   return job.id;
 }
 
-async function done(shopId: number, jobId: number, message: string): Promise<GenerationActionResult> {
+async function done(shopId: number, jobId: number, message: string, productId?: number): Promise<GenerationActionResult> {
   const job = await getJob(shopId, jobId);
-  return { ok: true, message, job: serializeGeneration(job!) };
+  const versions = productId ? (await listDescriptionVersions(shopId, productId)).map(serializeVersion) : undefined;
+  return { ok: true, message, job: serializeGeneration(job!), versions };
 }

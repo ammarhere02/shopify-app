@@ -35,7 +35,7 @@ Merchant Product Enrichment Hub. What is built and verified: `docs/VERIFICATION.
 - Every webhook goes through `processWebhook` in `services/webhook.server.ts` (receipt, dedupe, status code). Do not write a webhook route that skips it.
 - Every `/api/v1` route runs inside `withApiAuth` in `services/api.server.ts`. There the tenant comes from the API key row, never from the URL, query or body.
 - Three kinds of caller, three authenticators: admin pages `authenticate.admin`, `/api/v1` `withApiAuth` (API key), storefront `/proxy/*` `authenticate.public.appProxy` (Shopify's signature). Never mix their serializers: only the storefront one is safe for the public.
-- Scope is `read_products` only. The app never writes to Shopify.
+- Scopes: `read_products,write_products,read_publications,write_publications`. The only writes are `productUpdate` (descriptionHtml) and `publishablePublish`, both through `services/description-apply.server.ts` / `services/publication.server.ts`, never from a route. Before any write, check `hasScope(shop.scopes, …)`: shops installed before the write scopes were added have not granted them until the merchant re-approves.
 - The API version is pinned in two places that must match: `shopify.server.ts` and `webhooks.api_version` in `shopify.app.toml`.
 
 ## Not built yet (do not assume they exist)

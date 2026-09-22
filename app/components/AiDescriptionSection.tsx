@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
-import type { GenerationActionResult } from "../routes/app.products.$id_.generation";
+import type { GenerationActionResult, GenerationLoaderData } from "../routes/app.products.$id_.generation";
+import type { VersionView } from "../services/description-apply.server";
 import { isGenerationFinished } from "../services/generation-view";
 import type { GenerationView } from "../services/generation-view";
 import { sanitizeHtml } from "../services/html-sanitize";
+import type { PublicationChoice } from "../services/publication.server";
 
 const POLL_MS = 2000;
 const CONTEXT_MAX = 2000;
@@ -21,10 +23,17 @@ type Props = {
   imagesError: string | null;
   latest: GenerationView | null;
   history: AiHistoryItem[];
+  versions: VersionView[];
+  canWrite: boolean;
+  canPublish: boolean;
+  productStatus: string;
 };
 
 const STATUS_TONE = { QUEUED: "info", RUNNING: "info", SUCCEEDED: "success", FAILED: "critical" } as const;
-const REVIEW_TONE = { DRAFT: "info", APPROVED: "success", REJECTED: "neutral", APPLIED: "success" } as const;
+const REVIEW_TONE = { DRAFT: "info", APPROVED: "success", REJECTED: "neutral", APPLYING: "info", APPLIED: "success" } as const;
+const APPLY_MODAL = "ai-apply-confirm";
+const PUBLISH_MODAL = "ai-publish-confirm";
+const RESTORE_MODAL = "ai-restore-confirm";
 
 /** One key per intended generation: a retried submit reuses it, the next click gets a new one. */
 const newKey = () => crypto.randomUUID();
@@ -33,10 +42,15 @@ export function AiDescriptionSection(props: Props) {
   const { productId, configured, models, maxImages, images } = props;
   const endpoint = `/app/products/${productId}/generation`;
   const actions = useFetcher<GenerationActionResult>();
-  const poll = useFetcher<{ job: GenerationView }>();
+  const poll = useFetcher<GenerationLoaderData>();
+  const channels = useFetcher<GenerationLoaderData>();
 
   const [job, setJob] = useState<GenerationView | null>(props.latest);
   const [history, setHistory] = useState<AiHistoryItem[]>(props.history);
+  const [versions, setVersions] = useState<VersionView[]>(props.versions);
+  const [publicationId, setPublicationId] = useState("");
+  // A version row holds two texts: what it wrote and what it replaced. Either can be restored.
+  const [restoreTarget, setRestoreTarget] = useState<{ versionId: number; which: "written" | "previous"; html: string } | null>(null);
   const [selected, setSelected] = useState<string[]>(images[0] ? [images[0].id] : []);
   const [context, setContext] = useState("");
   const [model, setModel] = useState(models[0] ?? "");
@@ -53,22 +67,36 @@ export function AiDescriptionSection(props: Props) {
     });
   };
 
-  // Result of generate / save / approve / reject.
+  // Result of generate / save / approve / reject / apply / restore / publish.
   useEffect(() => {
     const data = actions.data;
     if (!data?.ok) return;
     idempotencyKey.current = newKey();
-    showJob(data.job);
-    setDraft(data.job.draftHtml ?? "");
+    if (data.job) {
+      showJob(data.job);
+      setDraft(data.job.draftHtml ?? "");
+    }
+    if (data.versions) setVersions(data.versions);
   }, [actions.data]);
 
   // Poll result: a plain read, so a lost or repeated poll changes nothing.
   useEffect(() => {
-    const next = poll.data?.job;
+    const next = poll.data && "job" in poll.data ? poll.data.job : null;
     if (!next) return;
     showJob(next);
     if (isGenerationFinished(next.status)) setDraft(next.draftHtml ?? "");
   }, [poll.data]);
+
+  const channelData = channels.data;
+  const publications = useMemo<PublicationChoice[]>(
+    () => (channelData && "publications" in channelData ? channelData.publications : []),
+    [channelData],
+  );
+  const publicationsError = channels.data && "publicationsError" in channels.data ? channels.data.publicationsError : null;
+  const liveStatus = channels.data && "productStatus" in channels.data ? channels.data.productStatus : props.productStatus;
+  useEffect(() => {
+    if (!publicationId && publications[0]) setPublicationId(publications.find((p) => !p.published)?.id ?? publications[0].id);
+  }, [publications, publicationId]);
 
   const running = job !== null && !isGenerationFinished(job.status);
   const runningJobId = running ? job.id : null;
@@ -107,7 +135,7 @@ export function AiDescriptionSection(props: Props) {
       },
       selected,
     );
-  const review = (intent: "saveDraft" | "approve" | "reject" | "reopen") =>
+  const review = (intent: "saveDraft" | "approve" | "reject" | "reopen" | "apply") =>
     job && send(intent, { jobId: String(job.id), ...(intent === "saveDraft" || intent === "approve" ? { descriptionHtml: draft } : {}) });
 
   const toggle = (id: string, checked: boolean) =>
@@ -286,8 +314,202 @@ export function AiDescriptionSection(props: Props) {
                   )}
                   {job.reviewStatus === "REJECTED" && <s-text>Rejected. Regenerate to try again.</s-text>}
                 </s-stack>
+
+                {(job.reviewStatus === "APPROVED" || job.reviewStatus === "APPLYING" || job.reviewStatus === "APPLIED") && (
+                  <>
+                    <s-divider />
+                    <s-heading>3. Write to Shopify</s-heading>
+                    {!props.canWrite && (
+                      <s-banner tone="warning">
+                        This store has not granted the app permission to write products yet. Reload the app from
+                        Shopify admin and accept the new permission, then come back here.
+                      </s-banner>
+                    )}
+                    {result && !result.ok && result.code === "STALE" && (
+                      <s-banner tone="critical" heading="The product changed in Shopify">
+                        Someone edited this product&apos;s description after this text was generated. Reload the page to
+                        see the current text, or regenerate from it.
+                      </s-banner>
+                    )}
+                    {job.error && job.reviewStatus === "APPROVED" && (
+                      <s-banner tone="warning">{job.error}</s-banner>
+                    )}
+                    {job.reviewStatus === "APPLIED" && (
+                      <s-banner tone="success">This description is live in Shopify (see Versions below to restore an earlier one).</s-banner>
+                    )}
+                    {job.reviewStatus === "APPLYING" && <s-paragraph>Writing to Shopify…</s-paragraph>}
+                    {job.reviewStatus === "APPROVED" && (
+                      <s-stack direction="inline" gap="base" alignItems="center">
+                        <s-button variant="primary" disabled={busy || !props.canWrite} commandFor={APPLY_MODAL} command="--show">
+                          Apply to product…
+                        </s-button>
+                        <s-text color="subdued">Replaces the product description in Shopify. You can restore the previous one later.</s-text>
+                      </s-stack>
+                    )}
+
+                    <s-modal id={APPLY_MODAL} heading="Replace the product description?" size="large">
+                      <s-stack gap="base">
+                        <s-paragraph>
+                          The current description in Shopify will be replaced by the approved text. The previous
+                          text is kept in Versions and can be restored.
+                        </s-paragraph>
+                        <s-grid gridTemplateColumns="1fr 1fr" gap="base">
+                          <s-stack gap="small">
+                            <s-text type="strong">Previous (last known)</s-text>
+                            <s-box padding="base" border="base" borderRadius="base" background="subdued">
+                              <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(versions[0]?.descriptionHtml ?? "") || "<p><em>Not recorded by this app yet.</em></p>" }} />
+                            </s-box>
+                          </s-stack>
+                          <s-stack gap="small">
+                            <s-text type="strong">New</s-text>
+                            <s-box padding="base" border="base" borderRadius="base">
+                              <div dangerouslySetInnerHTML={{ __html: preview }} />
+                            </s-box>
+                          </s-stack>
+                        </s-grid>
+                      </s-stack>
+                      <s-button slot="secondary-actions" commandFor={APPLY_MODAL} command="--hide">
+                        Cancel
+                      </s-button>
+                      <s-button
+                        slot="primary-action"
+                        variant="primary"
+                        loading={busy}
+                        commandFor={APPLY_MODAL}
+                        command="--hide"
+                        onClick={() => review("apply")}
+                      >
+                        Apply to Shopify
+                      </s-button>
+                    </s-modal>
+                  </>
+                )}
               </>
             )}
+          </>
+        )}
+
+        {(versions.length > 0 || props.canPublish) && <s-divider />}
+
+        {props.canPublish && (
+          <>
+            <s-heading>Sales channels</s-heading>
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <s-button
+                disabled={busy}
+                commandFor={PUBLISH_MODAL}
+                command="--show"
+                onClick={() => channels.load(`${endpoint}?publications=1`)}
+              >
+                Publish to a channel…
+              </s-button>
+              <s-text color="subdued">
+                Makes the product visible on one sales channel. The product must be Active in Shopify.
+              </s-text>
+            </s-stack>
+            <s-modal id={PUBLISH_MODAL} heading="Publish this product?">
+              <s-stack gap="base">
+                {channels.state !== "idle" && <s-spinner size="base" accessibilityLabel="Loading sales channels" />}
+                {publicationsError && <s-banner tone="critical">{publicationsError}</s-banner>}
+                {liveStatus !== "ACTIVE" && (
+                  <s-banner tone="warning">
+                    The product is {liveStatus}. Shopify only shows Active products, so set it to Active in Shopify first.
+                  </s-banner>
+                )}
+                {publications.length > 0 && (
+                  <s-select
+                    label="Sales channel"
+                    value={publicationId}
+                    error={errors.publicationId}
+                    onChange={(e) => setPublicationId(e.currentTarget.value)}
+                  >
+                    {publications.map((p) => (
+                      <s-option key={p.id} value={p.id}>
+                        {p.name}
+                        {p.published ? " (already published)" : ""}
+                      </s-option>
+                    ))}
+                  </s-select>
+                )}
+              </s-stack>
+              <s-button slot="secondary-actions" commandFor={PUBLISH_MODAL} command="--hide">
+                Cancel
+              </s-button>
+              <s-button
+                slot="primary-action"
+                variant="primary"
+                disabled={!publicationId || liveStatus !== "ACTIVE" || busy}
+                commandFor={PUBLISH_MODAL}
+                command="--hide"
+                onClick={() => send("publish", { publicationId })}
+              >
+                Publish
+              </s-button>
+            </s-modal>
+          </>
+        )}
+
+        {versions.length > 0 && (
+          <>
+            <s-heading>Versions written by this app</s-heading>
+            <s-unordered-list>
+              {versions.map((v, index) => (
+                <s-list-item key={v.id}>
+                  <s-stack direction="inline" gap="small" alignItems="center">
+                    <s-text>
+                      v{v.id} · {new Date(v.appliedAt).toLocaleString()} · {v.source === "RESTORE" ? `restored from v${v.restoredFromVersionId}` : `generation #${v.generationId}`} · by {v.appliedBy}
+                    </s-text>
+                    {index === 0 && <s-badge tone="success">current</s-badge>}
+                    {index > 0 && props.canWrite && (
+                      <s-button
+                        variant="tertiary"
+                        disabled={busy}
+                        commandFor={RESTORE_MODAL}
+                        command="--show"
+                        onClick={() => setRestoreTarget({ versionId: v.id, which: "written", html: v.descriptionHtml })}
+                      >
+                        Restore
+                      </s-button>
+                    )}
+                    {index === 0 && v.previousDescriptionHtml && props.canWrite && (
+                      <s-button
+                        variant="tertiary"
+                        disabled={busy}
+                        commandFor={RESTORE_MODAL}
+                        command="--show"
+                        onClick={() => setRestoreTarget({ versionId: v.id, which: "previous", html: v.previousDescriptionHtml! })}
+                      >
+                        Restore what it replaced
+                      </s-button>
+                    )}
+                  </s-stack>
+                </s-list-item>
+              ))}
+            </s-unordered-list>
+            <s-modal id={RESTORE_MODAL} heading="Restore this description?" size="large">
+              <s-stack gap="base">
+                <s-paragraph>
+                  The current Shopify description will be replaced by the text below. This creates a new version;
+                  nothing in the history is deleted.
+                </s-paragraph>
+                <s-box padding="base" border="base" borderRadius="base" background="subdued">
+                  <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(restoreTarget?.html ?? "") }} />
+                </s-box>
+              </s-stack>
+              <s-button slot="secondary-actions" commandFor={RESTORE_MODAL} command="--hide">
+                Cancel
+              </s-button>
+              <s-button
+                slot="primary-action"
+                variant="primary"
+                disabled={!restoreTarget || busy}
+                commandFor={RESTORE_MODAL}
+                command="--hide"
+                onClick={() => restoreTarget && send("restore", { versionId: String(restoreTarget.versionId), which: restoreTarget.which })}
+              >
+                Restore in Shopify
+              </s-button>
+            </s-modal>
           </>
         )}
 

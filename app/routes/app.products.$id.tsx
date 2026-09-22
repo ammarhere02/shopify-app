@@ -7,7 +7,6 @@ import type {
 import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import { requireActiveShop } from "../services/shop.server";
 import {
   getProductById,
   removeEnrichment,
@@ -26,7 +25,9 @@ import {
   fetchProductForDescription,
   selectableImages,
 } from "../services/description-generation.server";
+import { listDescriptionVersions, serializeVersion } from "../services/description-apply.server";
 import { serializeGeneration } from "../services/generation-view";
+import { hasScope, requireActiveShop } from "../services/shop.server";
 import { createShopifyClient } from "../shopify/graphql-client.server";
 
 function parseId(raw: string | undefined) {
@@ -67,12 +68,17 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   }
   const jobs = await listJobsForProduct(shop.id, product.id, 10);
   const latest = jobs[0] ? await getJob(shop.id, jobs[0].id) : null;
+  const versions = (await listDescriptionVersions(shop.id, product.id)).map(serializeVersion);
 
   return {
     ai: {
       ...ai,
       images,
       imagesError,
+      // Writing needs scopes granted after the first install; the page says so instead of failing late.
+      canWrite: hasScope(shop.scopes, "write_products"),
+      canPublish: hasScope(shop.scopes, "write_publications"),
+      versions,
       latest: latest ? serializeGeneration(latest) : null,
       history: jobs.map((j) => ({
         id: j.id,
@@ -243,6 +249,10 @@ export default function ProductDetail() {
           imagesError={ai.imagesError}
           latest={ai.latest}
           history={ai.history}
+          versions={ai.versions}
+          canWrite={ai.canWrite}
+          canPublish={ai.canPublish}
+          productStatus={product.status}
         />
       )}
 

@@ -53,7 +53,8 @@ function clientIp(request: Request) {
   return request.headers.get("x-forwarded-for")?.split(",")[0].trim() || "unknown";
 }
 
-export type ApiContext = { shop: Shop; requestId: string; request: Request };
+/** `actor` is the audit identity for writes to Shopify: "api-key:<prefix>". */
+export type ApiContext = { shop: Shop; requestId: string; request: Request; actor: string };
 
 /**
  * Every /api/v1 route runs inside this: request id -> API key -> tenant -> rate limit ->
@@ -92,7 +93,7 @@ export async function withApiAuth(
     const hit = limiter.hit(String(auth.key.id));
     if (!hit.allowed) throw tooMany(hit.retryAfterSec);
 
-    response = await handler({ shop: auth.shop, requestId, request });
+    response = await handler({ shop: auth.shop, requestId, request, actor: `api-key:${auth.key.keyPrefix}` });
   } catch (err) {
     if (err instanceof ApiError) {
       response = errorResponse(err, requestId);

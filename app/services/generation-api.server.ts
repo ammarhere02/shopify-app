@@ -4,6 +4,8 @@ import { unauthenticated } from "../shopify.server";
 import { ApiError } from "./api.server";
 import { GenerationError, createGenerationDeps } from "./description-generation.server";
 import type { GenerationDeps } from "./description-generation.server";
+import { createShopifyClient } from "../shopify/graphql-client.server";
+import type { ShopifyClient } from "../shopify/graphql-client.server";
 
 /** Glue between the generation services and the /api/v1 error envelope. */
 
@@ -12,6 +14,9 @@ const STATUS: Record<GenerationError["code"], [number, string]> = {
   NOT_FOUND: [404, "not_found"],
   LIMIT: [429, "generation_limit_reached"],
   CONFLICT: [409, "invalid_state"],
+  STALE: [409, "stale_product"],
+  REJECTED: [422, "shopify_rejected"],
+  FORBIDDEN: [403, "missing_scope"],
 };
 
 export function toApiError(err: unknown): unknown {
@@ -35,14 +40,24 @@ export async function withGenerationErrors<T>(body: () => Promise<T>): Promise<T
 }
 
 /** API calls have no browser session, so the shop's stored offline session is used (as for syncs). */
-export async function apiGenerationDeps(shop: Shop, requestId: string): Promise<GenerationDeps> {
-  const admin = await unauthenticated
+async function offlineAdmin(shop: Shop) {
+  return unauthenticated
     .admin(shop.shopDomain)
     .then((ctx) => ctx.admin)
     .catch(() => {
       throw new ApiError(409, "shop_session_unavailable", "No Shopify session for this shop. Open the app in Shopify admin, then retry.");
     });
+}
+
+export async function apiGenerationDeps(shop: Shop, requestId: string): Promise<GenerationDeps> {
+  const admin = await offlineAdmin(shop);
   return createGenerationDeps(admin.graphql, { shopId: shop.id, requestId });
+}
+
+/** Apply, restore and publish only need Shopify; they must work even when OpenRouter is not configured. */
+export async function apiShopifyClient(shop: Shop, requestId: string): Promise<ShopifyClient> {
+  const admin = await offlineAdmin(shop);
+  return createShopifyClient(admin.graphql, { logContext: { shopId: shop.id, requestId } });
 }
 
 export function parseJobId(raw: string | undefined) {

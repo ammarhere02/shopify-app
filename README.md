@@ -2,7 +2,7 @@
 
 An embedded Shopify application. It synchronizes a merchant's product catalog from Shopify into MySQL, lets the merchant attach a public badge and a private internal note to a product, exposes that data through an authenticated API, and renders the badge on the storefront through a Theme App Extension. Product changes in Shopify reach the local copy through verified webhooks; a reconciliation run repairs missed events.
 
-**Stack:** React Router 7, TypeScript, Prisma, MySQL 8, Shopify Theme App Extension. Admin GraphQL API version `2026-07`. Access scope: `read_products`.
+**Stack:** React Router 7, TypeScript, Prisma, MySQL 8, Shopify Theme App Extension. Admin GraphQL API version `2026-07`. Access scopes: `read_products`, `write_products`, `read_publications`, `write_publications` (writes are limited to the product description and publishing to a sales channel).
 
 ## Documentation
 
@@ -44,7 +44,7 @@ npm run setup                 # prisma generate + prisma migrate deploy
 npm run dev                   # shopify app dev
 ```
 
-1. `shopify.app.toml` references the author's app. Run `npm run config:link` to select or create your own, and confirm the scope `read_products` and webhook API version `2026-07` are retained.
+1. `shopify.app.toml` references the author's app. Run `npm run config:link` to select or create your own, and confirm the scopes `read_products,write_products,read_publications,write_publications` and webhook API version `2026-07` are retained. A store that installed the app with `read_products` only is asked to approve the new scopes the next time the app is opened; until then Apply and Publish answer 403 and the product page says so.
 2. `npm run dev` prompts for the development store, opens a tunnel and updates the application, redirect and app proxy URLs.
 3. Press `p` to open the app in the Shopify admin and install it.
 
@@ -111,7 +111,7 @@ Shopify API responses are mocked in automated tests. Webhook and app proxy signa
 - Synchronization and webhook processing run inside the request (60-second budget for synchronization); there is no background worker or queue. Failed webhook deliveries remain recorded as `FAILED` and are repaired by reconciliation.
 - Rate limits are held in memory, per process.
 - API keys are managed from the command line; there is no admin page. An OpenAPI file is not provided; the endpoint reference is in `docs/SUBMISSION.md`.
-- `variants` has no inventory field because the app holds only `read_products`.
+- `variants` has no inventory field: the app reads products with `read_products` and never asks for inventory scopes.
 - There is no `products/create` subscription; a new product arrives with its first update or the next synchronization.
 - The `Dockerfile` is the unmodified template file and has not been validated for deployment.
 

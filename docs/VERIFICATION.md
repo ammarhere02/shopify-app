@@ -15,10 +15,12 @@ Legend: `[x]` verified · `[ ]` not verified yet
 | Developer API `/api/v1` and API keys | F-06, §4.5 | yes | yes | partly done |
 | Storefront badge: app proxy and Theme App Extension | F-07, §4.6 | yes | yes | open |
 | Structured logs with correlation ids, no secrets | F-10 | yes | yes (log content asserted) | open |
+| AI description: generate, review, edit | AI 01–07 (extension) | yes | yes | partly done |
+| AI description: apply, publish, versions, restore | AI 08–12 (extension) | yes | yes | open |
 
 Not built: F-12 (metafield mutation, stretch), an admin page for API keys, ETag on the storefront endpoint. The architecture note, ER diagram, endpoint reference and test evidence are in [SUBMISSION.md](SUBMISSION.md). Submission documents still to write: OpenAPI file, demo.
 
-Automated checks, all passing: `npm test` (111), `npm run test:integration` (139, real MySQL), `npm run typecheck`, `npm run lint`, `npm run build`, `npx shopify theme check --path extensions/product-badge`. Shopify is mocked in automated tests; request signatures (webhook HMAC, app proxy) are real.
+Automated checks, all passing: `npm test` (116), `npm run test:integration` (157, real MySQL), `npm run typecheck`, `npm run lint`, `npm run build`, `npx shopify theme check --path extensions/product-badge`. Shopify is mocked in automated tests; request signatures (webhook HMAC, app proxy) are real.
 
 ---
 
@@ -148,3 +150,27 @@ Live dev-store checklist (needs a working tunnel; enter the storefront password 
 - [ ] Cards do not move when badges appear (Reserve space on); filtering or loading more products badges the new cards
 
 Known limits: one request per page view (one per 50 products, cached 60s); merchant edits take up to 60s to appear; the rate limit is in memory, single process; themes must support `@app` blocks (Online Store 2.0), and for cards the theme's product card itself must accept `@app` blocks and pass its product down (Horizon does; on Dawn-era themes the card block is not offered); the block shows nothing if JavaScript is disabled.
+
+## AI description: apply to Shopify, publish, versions, restore
+
+Automated (`tests/description-apply.integration.test.ts`, real routes + services + MySQL, Shopify faked as an in-memory product store):
+- [x] Apply writes the approved draft with `productUpdate`, records a version with before/after text and Shopify's `updatedAt`, marks the job APPLIED, refreshes `products.updatedAtShopify`; exactly one read and one mutation
+- [x] Apply once: second call 409 `invalid_state`; job not approved 409; two simultaneous applies → one 201, one 409, one mutation, one version row
+- [x] Stale product (description changed in Shopify) → 409 `stale_product`, no mutation, job back to APPROVED with the reason; Shopify already holding our text is not stale (retry after an interrupted apply)
+- [x] Shopify `userErrors` → 422 `shopify_rejected` with field messages, job retryable, no version; transport failure → 500, retryable, then 201
+- [x] Job stuck in APPLYING beyond 2 minutes is recovered and applied
+- [x] Missing `write_products` → 403 `missing_scope` without touching Shopify; other shop's key → 404; no key → 401
+- [x] Restore an older version (new RESTORE row linked by `restoredFromVersionId`, before/after recorded) and "previous" (the merchant's original text before the first apply); bad `which` 422; unknown/other-shop/other-product version 404
+- [x] Publish: channel list with the product's state; publish to one → audit row SUCCEEDED; DRAFT product 409 before any call; unknown or malformed channel id 422 with no audit row; `userErrors` → FAILED audit row + 422; missing `write_publications` 403; other shop 404
+- [x] Admin resource route: apply / publish / restore with actor `admin:<shop>`, `?publications=1` loader, STALE code returned for the page banner
+- [x] Mutations and the publications query validated with the Shopify AI Toolkit against 2026-07 (scopes `write_products`, `write_publications`, `read_publications`)
+
+Live dev-store checklist:
+- [ ] Deploy the new scopes (`shopify app deploy`), open the app → Shopify asks to approve `write_products` / `write_publications`; `shops.scopes` updated (`app/scopes_update` receipt present)
+- [ ] Before approving: the product page shows the "has not granted" warning and Apply is disabled
+- [ ] Approve a draft → Apply to product… → the modal shows previous vs new → Apply → success banner, job APPLIED, Versions lists v1 (current); the description in Shopify admin matches
+- [ ] Edit the description in Shopify admin, then Apply another approved draft → "The product changed in Shopify" banner, nothing overwritten
+- [ ] Restore what it replaced → Shopify shows the original text; Versions shows a RESTORE row; Restore the AI text again works
+- [ ] Double-click Apply → one version row
+- [ ] Publish to a channel… → channel list loads; DRAFT product shows the warning and cannot publish; ACTIVE product publishes; `publication_actions` row SUCCEEDED; product visible on the Online Store
+- [ ] `curl` the API: apply (201), apply again (409), versions (list), restore (201), publish (200), all with `X-Request-Id`

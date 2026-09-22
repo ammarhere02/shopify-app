@@ -271,12 +271,14 @@ describe("merchant review", () => {
     expect(await moveReviewStatus(db, shopA.id, job.id, "DRAFT", "APPROVED")).toBe(false);
   });
 
-  it("walks DRAFT → APPROVED → APPLIED and freezes the draft after approval", async () => {
+  it("walks DRAFT → APPROVED → APPLYING → APPLIED and freezes the draft after approval", async () => {
     const id = await succeededJob(shopA.id, productA.id);
     expect(await moveReviewStatus(db, shopA.id, id, "DRAFT", "APPLIED")).toBe(false);
     expect(await moveReviewStatus(db, shopA.id, id, "DRAFT", "APPROVED")).toBe(true);
     expect(await saveDraft(shopA.id, id, "<p>late edit</p>")).toBe(false);
-    expect(await moveReviewStatus(db, shopA.id, id, "APPROVED", "APPLIED")).toBe(true);
+    expect(await moveReviewStatus(db, shopA.id, id, "APPROVED", "APPLIED")).toBe(false);
+    expect(await moveReviewStatus(db, shopA.id, id, "APPROVED", "APPLYING")).toBe(true);
+    expect(await moveReviewStatus(db, shopA.id, id, "APPLYING", "APPLIED")).toBe(true);
     expect(await moveReviewStatus(db, shopA.id, id, "APPLIED", "DRAFT")).toBe(false);
     const job = await getJob(shopA.id, id);
     expect(job).toMatchObject({ reviewStatus: "APPLIED", draftHtml: "<p>Raw</p>" });
@@ -287,8 +289,8 @@ describe("merchant review", () => {
     const id = await succeededJob(shopA.id, productA.id);
     await moveReviewStatus(db, shopA.id, id, "DRAFT", "APPROVED");
     const wins = await Promise.all([
-      moveReviewStatus(db, shopA.id, id, "APPROVED", "APPLIED"),
-      moveReviewStatus(db, shopA.id, id, "APPROVED", "APPLIED"),
+      moveReviewStatus(db, shopA.id, id, "APPROVED", "APPLYING"),
+      moveReviewStatus(db, shopA.id, id, "APPROVED", "APPLYING"),
     ]);
     expect(wins.filter(Boolean)).toHaveLength(1);
   });
@@ -306,7 +308,7 @@ describe("merchant review", () => {
     await moveReviewStatus(db, shopA.id, id, "DRAFT", "APPROVED");
     await expect(
       db.$transaction(async (tx) => {
-        await moveReviewStatus(tx, shopA.id, id, "APPROVED", "APPLIED");
+        await moveReviewStatus(tx, shopA.id, id, "APPROVED", "APPLYING");
         await createVersion(tx, shopA.id, {
           productId: productA.id,
           jobId: id,

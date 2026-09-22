@@ -199,6 +199,7 @@ enum ReviewStatus {
   DRAFT
   APPROVED
   REJECTED
+  APPLYING // the write to Shopify is in flight; a crash leaves this visible
   APPLIED
 }
 

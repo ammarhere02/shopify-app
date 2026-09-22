@@ -44,7 +44,10 @@ export type GenerationErrorCode =
   | "VALIDATION" // bad request content → 422
   | "NOT_FOUND" // product unknown to this shop, or gone from Shopify → 404
   | "LIMIT" // per-shop concurrency or daily limit → 429
-  | "CONFLICT"; // the job is not in a state that allows this → 409
+  | "CONFLICT" // the job is not in a state that allows this → 409
+  | "STALE" // the product changed in Shopify since the text was generated → 409
+  | "REJECTED" // Shopify answered with userErrors → 422
+  | "FORBIDDEN"; // the shop has not granted a scope the operation needs → 403
 
 export class GenerationError extends Error {
   constructor(

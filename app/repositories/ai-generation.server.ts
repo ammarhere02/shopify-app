@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import db from "../db.server";
-import { JOB_ABANDON_MS, canMoveReview } from "../services/generation-state";
+import { APPLY_ABANDON_MS, JOB_ABANDON_MS, canMoveReview } from "../services/generation-state";
 import type { ReviewStatus } from "../services/generation-state";
 
 const ERROR_MAX = 1000;
@@ -194,6 +194,24 @@ export async function failAbandonedJobs(
       ],
     },
     data: { status: "FAILED", completedAt: now, error: "Abandoned: the process stopped before the job finished" },
+  });
+  return count;
+}
+
+/**
+ * An APPLYING job whose process died mid-write goes back to APPROVED with an error note, so
+ * Apply can be retried. Shopify may already hold the text: the stale check on the retry
+ * sees our own write (same hash) and lets it through, and the version row is written then.
+ */
+export async function recoverAbandonedApplies(shopId: number, now = new Date(), client: Tx | typeof db = db) {
+  const cutoff = new Date(now.getTime() - APPLY_ABANDON_MS);
+  const { count } = await client.aiGenerationJob.updateMany({
+    where: { shopId, reviewStatus: "APPLYING", reviewedAt: { lt: cutoff } },
+    data: {
+      reviewStatus: "APPROVED",
+      reviewedAt: now,
+      error: "Apply was interrupted before it was recorded. Check the product in Shopify, then apply again.",
+    },
   });
   return count;
 }
