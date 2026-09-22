@@ -6,7 +6,7 @@ import { authenticate } from "../shopify.server";
 import { requireActiveShop } from "../services/shop.server";
 import { listProducts } from "../repositories/enrichment.server";
 import { PRODUCT_STATUSES } from "../lib/product-status";
-import { AiConfigError } from "../ai/config.server";
+import { AiConfigError, loadAiConfig } from "../ai/config.server";
 import { logger } from "../lib/logger.server";
 import { adminWriteLimiter } from "../services/admin-limits.server";
 import { GenerationError, createGenerationDeps } from "../services/description-generation.server";
@@ -31,6 +31,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<BatchActi
     const result = await startBatchGeneration(deps, shop.id, {
       productIds: form.getAll("productIds").map((v) => Number(v)),
       merchantContext: String(form.get("merchantContext") ?? "") || null,
+      model: String(form.get("model") ?? "") || null,
       idempotencyKey: String(form.get("idempotencyKey") ?? ""),
     });
     const queued = result.jobs.filter((j) => j.created).length;
@@ -66,9 +67,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     afterId: Number.isInteger(after) && after > 0 ? after : undefined,
   });
 
+  // Model names only (never the key); an unconfigured server just hides the batch section.
+  let aiModels: string[] = [];
+  try {
+    aiModels = loadAiConfig().models;
+  } catch (err) {
+    if (!(err instanceof AiConfigError)) throw err;
+  }
+
   return {
     filters: { query, status: status ?? "", hasBadge: badgeParam ?? "" },
     nextCursor,
+    aiModels,
     products: products.map((p) => ({
       id: p.id,
       title: p.title,
@@ -83,7 +93,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export default function Products() {
-  const { products, filters, nextCursor } = useLoaderData<typeof loader>();
+  const { products, filters, nextCursor, aiModels } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
   const [query, setQuery] = useState(filters.query);
   const [status, setStatus] = useState(filters.status);
@@ -93,6 +103,7 @@ export default function Products() {
   const batch = useFetcher<BatchActionResult>();
   const [selected, setSelected] = useState<number[]>([]);
   const [batchContext, setBatchContext] = useState("");
+  const [batchModel, setBatchModel] = useState(aiModels[0] ?? "");
   const batchKey = useRef(crypto.randomUUID());
   useEffect(() => {
     if (batch.data?.ok) {
@@ -107,6 +118,7 @@ export default function Products() {
     form.set("intent", "generateBatch");
     form.set("idempotencyKey", batchKey.current);
     form.set("merchantContext", batchContext);
+    form.set("model", batchModel);
     for (const id of selected) form.append("productIds", String(id));
     batch.submit(form, { method: "post" });
   };
@@ -229,7 +241,7 @@ export default function Products() {
         )}
       </s-section>
 
-      {products.length > 0 && (
+      {products.length > 0 && aiModels.length > 0 && (
         <s-section heading="AI descriptions for selected products">
           <s-stack gap="base">
             <s-paragraph>
@@ -243,6 +255,15 @@ export default function Products() {
               maxLength={2000}
               onInput={(e) => setBatchContext(e.currentTarget.value)}
             />
+            {aiModels.length > 1 && (
+              <s-select label="Model" value={batchModel} onChange={(e) => setBatchModel(e.currentTarget.value)}>
+                {aiModels.map((m) => (
+                  <s-option key={m} value={m}>
+                    {m}
+                  </s-option>
+                ))}
+              </s-select>
+            )}
             <s-stack direction="inline" gap="base" alignItems="center">
               <s-button variant="primary" disabled={selected.length === 0 || batch.state !== "idle"} loading={batch.state !== "idle"} onClick={queueBatch}>
                 Generate descriptions for {selected.length} selected

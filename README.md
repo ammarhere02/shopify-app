@@ -84,7 +84,7 @@ The product editor's **AI description** section writes a description from the pr
 
 **Workflow.** Generate (1–4 images, optional facts; runs in the background, nothing in Shopify changes) → review the draft in an HTML editor with preview, usage and claim warnings → Save draft / Approve / Reject / Regenerate → **Apply to product** after a confirmation showing previous and new text; if the description changed in Shopify since generation, Apply refuses (`stale_product`). Every write is recorded as a version; **Restore** writes an older version back through the same checks, and *Restore what it replaced* on the newest row brings back the pre-app text.
 
-**Batches.** On the Products list, select up to 20 products and *Generate descriptions for selected*: one job per product is queued (using each product's first images) and a worker inside the server runs them one at a time per shop; drafts appear on each product page for review. Queued jobs are database rows, so a restart does not lose them.
+**Batches.** On the Products list, select up to 20 products, optionally add facts and pick a model, and *Generate descriptions for selected*: one job per product is queued (using each product's first images) and a worker inside the server runs them one at a time per shop; drafts appear on each product page for review. Queued jobs are database rows, so a restart does not lose them.
 
 **Publishing.** *Publish to a channel…* lists the shop's sales channels with the product's state on each. The product must be Active in Shopify (a Draft product would be published but invisible, so the app refuses first). Every attempt is audited in `publication_actions`.
 

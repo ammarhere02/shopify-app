@@ -227,10 +227,16 @@ describe("batch routes", () => {
     form.set("intent", "generateBatch");
     form.set("idempotencyKey", randomUUID().slice(0, 32));
     form.set("merchantContext", "Cosy");
+    form.set("model", "vendor/vision:free");
     form.append("productIds", String(a.local));
     form.append("productIds", String(b.local));
     const result = await listRoute.action({ request: new Request("https://app.example.test/app/products", { method: "POST", body: form }), params: {}, context: {} } as never);
     expect(result).toMatchObject({ ok: true, message: expect.stringMatching(/1 generation queued, 1 skipped/), result: { jobs: [{ productId: a.local, created: true }], skipped: [{ productId: b.local }] } });
     expect(await db.aiGenerationJob.count({ where: { shopId: shopA.id, status: "QUEUED" } })).toBe(1);
+    expect((await db.aiGenerationJob.findFirst({ where: { shopId: shopA.id } }))!.model).toBe("vendor/vision:free");
+
+    form.set("model", "vendor/not-allowed");
+    form.set("idempotencyKey", randomUUID().slice(0, 32));
+    expect(await listRoute.action({ request: new Request("https://app.example.test/app/products", { method: "POST", body: form }), params: {}, context: {} } as never)).toMatchObject({ ok: false, errors: { model: "Model is not allowed" } });
   });
 });
