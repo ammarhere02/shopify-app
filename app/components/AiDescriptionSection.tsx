@@ -127,7 +127,7 @@ const TAB_CSS = `
 .eh-panel--hist .eh-panel__body{max-height:240px}
 .eh-panel--info .eh-panel__body{max-height:280px}
 /* Everything under the hero image scrolls as one unit, so the product card stays a fixed height. */
-.eh-panel__scroll{max-height:560px;overflow:auto;overscroll-behavior:contain}
+.eh-panel__scroll{max-height:560px;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;flex:0 1 auto}
 .eh-info{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
 @container eh-work (min-width: 640px){.eh-info{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 .eh-info__title{font-size:13px;font-weight:600;color:rgba(0,0,0,.9);display:block;margin-bottom:8px}
@@ -148,10 +148,10 @@ const TAB_CSS = `
 .eh-acc__body{padding:0 16px 16px}
 
 /* Gallery: selected images feed the writer */
-.eh-hero{position:relative;aspect-ratio:4/3;background:#f6f6f7;overflow:hidden}
-.eh-hero img{width:100%;height:100%;object-fit:cover;display:block}
+.eh-hero{position:relative;aspect-ratio:4/3;background:#f6f6f7;overflow:hidden;flex:none;padding:12px;box-sizing:border-box}
+.eh-hero img{width:100%;height:100%;object-fit:contain;display:block}
 .eh-hero__empty{position:absolute;inset:0;display:grid;place-items:center;color:rgba(0,0,0,.5);font-size:13px;padding:16px;text-align:center}
-.eh-thumbs{display:flex;gap:8px;padding:12px 16px;overflow-x:auto}
+.eh-thumbs{display:flex;gap:8px;padding:12px 16px;overflow-x:auto;flex:none}
 .eh-thumb{appearance:none;flex:none;width:56px;height:56px;padding:0;border:2px solid transparent;border-radius:8px;overflow:hidden;background:#f6f6f7;cursor:pointer;position:relative;opacity:.7;transition:opacity .15s,border-color .15s}
 .eh-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .eh-thumb[aria-pressed="true"]{border-color:#303030;opacity:1}
