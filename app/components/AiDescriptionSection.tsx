@@ -37,9 +37,15 @@ type Props = {
   canWrite: boolean;
   canPublish: boolean;
   productStatus: string;
-  /** Page-owned cards for the left column: shown under the generation inputs (badge editor) and at the end (details). */
-  asideTop?: ReactNode;
-  asideBottom?: ReactNode;
+  productTitle: string;
+  /** Small badges for the product panel header (status, badge state). */
+  statusBadges?: ReactNode;
+  /** Page-owned content for the left panel's collapsible sections. */
+  badgeEditor?: ReactNode;
+  badgeHint?: string;
+  productDetails?: ReactNode;
+  /** Page-level result banner (top of the page): success fades out, errors stay. */
+  onNotice: (tone: "success" | "critical", message: string) => void;
 };
 
 type Intent =
@@ -58,8 +64,6 @@ const PUBLISH_MODAL = "ai-publish-confirm";
 const RESTORE_MODAL = "ai-restore-confirm";
 /** Intents whose answer brings a different text into the editor. Every other answer keeps what the merchant typed. */
 const REPLACES_DRAFT = new Set<Intent>(["generate", "regenerate", "restore"]);
-/** Intents that belong to the generation inputs; their errors show there, all others in the workspace. */
-const GENERATE_INTENTS = new Set<Intent>(["generate", "regenerate"]);
 
 const pretty = (s: string) => s.charAt(0) + s.slice(1).toLowerCase();
 const when = (iso: string) => new Date(iso).toLocaleString();
@@ -73,15 +77,15 @@ const newKey = () => crypto.randomUUID();
  * Styled by the scoped rules in TAB_CSS (class prefix eh-), nothing global.
  */
 const TAB_CSS = `
-.eh-tabs{display:flex;gap:2px;border-bottom:1px solid rgba(0,0,0,.13);margin:0 0 12px;padding:0;overflow-x:auto}
-.eh-tabs button{appearance:none;background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:6px 10px;font:inherit;font-size:13px;color:rgba(0,0,0,.6);cursor:pointer;white-space:nowrap;border-radius:4px 4px 0 0}
-.eh-tabs button:hover{color:rgba(0,0,0,.9);background:rgba(0,0,0,.04)}
+.eh-tabs{display:flex;gap:2px;border-bottom:1px solid rgba(0,0,0,.1);margin:0;padding:0 16px;overflow-x:auto;flex:none}
+.eh-tabs button{appearance:none;background:none;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;padding:10px 10px;font:inherit;font-size:13px;color:rgba(0,0,0,.6);cursor:pointer;white-space:nowrap}
+.eh-tabs button:hover{color:rgba(0,0,0,.9)}
 .eh-tabs button[aria-selected="true"]{color:rgba(0,0,0,.95);border-bottom-color:currentColor;font-weight:600}
 .eh-tabs button:focus-visible{outline:2px solid #005bd3;outline-offset:-2px}
-.eh-rich{font-size:14px;line-height:1.5}
+.eh-rich{font-size:14px;line-height:1.55;color:rgba(0,0,0,.85)}
 .eh-rich>:first-child{margin-top:0}.eh-rich>:last-child{margin-bottom:0}
 .eh-rich h2,.eh-rich h3,.eh-rich h4{font-size:15px;margin:12px 0 4px}
-.eh-fade{animation:eh-fade .35s ease-out}
+.eh-fade{animation:eh-fade .3s ease-out}
 @keyframes eh-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .eh-skeleton{display:grid;gap:10px;padding:4px 0}
 .eh-skeleton span{display:block;height:12px;border-radius:6px;background:linear-gradient(90deg,rgba(0,0,0,.06) 25%,rgba(0,0,0,.12) 50%,rgba(0,0,0,.06) 75%);background-size:200% 100%;animation:eh-shimmer 1.4s linear infinite}
@@ -92,7 +96,54 @@ const TAB_CSS = `
 .eh-live i{width:7px;height:7px;border-radius:50%;background:rgba(0,0,0,.25)}
 .eh-live[data-live="true"] i{background:#005bd3;animation:eh-blink .9s ease-in-out infinite}
 @keyframes eh-blink{50%{opacity:.25}}
-@media (prefers-reduced-motion:reduce){.eh-fade,.eh-skeleton span,.eh-live i{animation:none}}
+
+/* Workspace: fills the app viewport on wide screens, each panel scrolls on its own; plain flow below 760px. */
+.eh-layout{container-type:inline-size;container-name:eh-page}
+.eh-cols{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}
+.eh-col{display:grid;gap:16px;min-width:0}
+.eh-work{container-type:inline-size;container-name:eh-work;min-width:0;display:grid;gap:16px}
+@container eh-page (min-width: 760px){
+  .eh-cols{grid-template-columns:300px minmax(0,1fr);height:calc(100dvh - 150px);min-height:560px}
+  .eh-col{height:100%;overflow:auto;align-content:start;padding-right:2px}
+  .eh-work{height:100%;grid-template-rows:minmax(0,1fr) auto;min-height:0}
+  .eh-panel--desc{min-height:0}
+  .eh-panel--hist{max-height:38%}
+}
+.eh-panel{background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.04);display:flex;flex-direction:column;min-height:0}
+.eh-panel__head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid rgba(0,0,0,.08);flex:none;flex-wrap:wrap}
+.eh-panel__title{font-size:13px;font-weight:600;color:rgba(0,0,0,.9)}
+.eh-panel__body{padding:16px;overflow:auto;min-height:0;flex:1 1 auto}
+.eh-panel__body--flush{padding:0}
+.eh-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+
+/* Collapsible section inside the left panel */
+.eh-acc{border-top:1px solid rgba(0,0,0,.08)}
+.eh-acc>button{appearance:none;width:100%;background:none;border:0;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;font:inherit;font-size:13px;font-weight:600;color:rgba(0,0,0,.9);cursor:pointer;text-align:left}
+.eh-acc>button:hover{background:rgba(0,0,0,.03)}
+.eh-acc>button:focus-visible{outline:2px solid #005bd3;outline-offset:-2px}
+.eh-acc__chev{width:16px;height:16px;flex:none;transition:transform .2s ease;opacity:.6}
+.eh-acc[data-open="true"] .eh-acc__chev{transform:rotate(180deg)}
+.eh-acc__hint{font-weight:400;color:rgba(0,0,0,.55);font-size:12px;margin-left:auto}
+.eh-acc__body{padding:0 16px 16px}
+
+/* Gallery: selected images feed the writer */
+.eh-hero{position:relative;aspect-ratio:1/1;background:#f6f6f7;border-radius:12px 12px 0 0;overflow:hidden}
+.eh-hero img{width:100%;height:100%;object-fit:cover;display:block}
+.eh-hero__empty{position:absolute;inset:0;display:grid;place-items:center;color:rgba(0,0,0,.5);font-size:13px;padding:16px;text-align:center}
+.eh-thumbs{display:flex;gap:8px;padding:12px 16px;overflow-x:auto}
+.eh-thumb{appearance:none;flex:none;width:56px;height:56px;padding:0;border:2px solid transparent;border-radius:8px;overflow:hidden;background:#f6f6f7;cursor:pointer;position:relative;opacity:.7;transition:opacity .15s,border-color .15s}
+.eh-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.eh-thumb[aria-pressed="true"]{border-color:#303030;opacity:1}
+.eh-thumb:hover{opacity:1}
+.eh-thumb:focus-visible{outline:2px solid #005bd3;outline-offset:2px}
+.eh-thumb__tick{position:absolute;top:3px;right:3px;width:16px;height:16px;border-radius:50%;background:#303030;color:#fff;display:grid;place-items:center;font-size:10px;line-height:1}
+.eh-thumb:disabled{cursor:not-allowed;opacity:.35}
+.eh-meta{padding:12px 16px 4px;display:flex;flex-direction:column;gap:6px}
+.eh-kv{display:grid;grid-template-columns:minmax(0,1fr);gap:6px 12px}
+@container eh-work (min-width: 560px){.eh-kv{grid-template-columns:140px minmax(0,1fr)}}
+.eh-split{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+@container eh-work (min-width: 720px){.eh-split{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+@media (prefers-reduced-motion:reduce){.eh-fade,.eh-skeleton span,.eh-live i,.eh-acc__chev{animation:none;transition:none}}
 `;
 
 function Tabs<T extends string>(props: { label: string; tabs: { id: T; label: string }[]; value: T; onChange: (id: T) => void }) {
@@ -126,6 +177,32 @@ function Tabs<T extends string>(props: { label: string; tabs: { id: T; label: st
           {tab.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+const Chevron = () => (
+  <svg className="eh-acc__chev" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+/** Collapsible section of the left panel: a real button with aria-expanded, so it works with the keyboard. */
+function Collapse(props: { title: string; hint?: string; defaultOpen?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(props.defaultOpen ?? false);
+  const id = useId();
+  return (
+    <div className="eh-acc" data-open={open}>
+      <button type="button" aria-expanded={open} aria-controls={id} onClick={() => setOpen((v) => !v)}>
+        {props.title}
+        {props.hint && <span className="eh-acc__hint">{props.hint}</span>}
+        <Chevron />
+      </button>
+      {open && (
+        <div className="eh-acc__body eh-fade" id={id}>
+          {props.children}
+        </div>
+      )}
     </div>
   );
 }
@@ -189,10 +266,13 @@ export function AiDescriptionSection(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actions.data]);
 
-  // Success feedback is a toast; errors stay on screen as banners.
+  // Every finished action reports to the page banner at the top: success fades out, errors stay.
+  // The STALE case keeps its own explanatory banner in the workspace as well.
+  const { onNotice } = props;
   useEffect(() => {
-    if (actions.state === "idle" && actions.data?.ok) shopify.toast.show(actions.data.message);
-  }, [actions.state, actions.data]);
+    if (actions.state !== "idle" || !actions.data) return;
+    onNotice(actions.data.ok ? "success" : "critical", actions.data.message);
+  }, [actions.state, actions.data, onNotice]);
 
   // Poll result: a plain read, so a lost or repeated poll changes nothing. The editor is only
   // (re)filled when a job finishes or another job is opened from the history.
@@ -247,9 +327,6 @@ export function AiDescriptionSection(props: Props) {
   const pending = (busy ? actions.formData?.get("intent") : null) as Intent | null;
   const result = actions.data;
   const errors: Record<string, string> = result && !result.ok ? result.errors : {};
-  const errorBanner =
-    result && !result.ok && result.code !== "STALE" ? <s-banner tone="critical">{result.message}</s-banner> : null;
-  const errorInGenerate = errorBanner && (!lastIntent.current || GENERATE_INTENTS.has(lastIntent.current));
 
   const send = (intent: Intent, fields: Record<string, string> = {}, mediaIds: string[] = []) => {
     lastIntent.current = intent;
@@ -281,183 +358,202 @@ export function AiDescriptionSection(props: Props) {
   const edited = Boolean(job?.generated && draft !== job.generated.descriptionHtml);
   const mainStatus = aiStatusLabel(job);
   const panelBase = useId();
+  const hero = images.find((i) => i.id === selected[selected.length - 1]) ?? images[0] ?? null;
 
   return (
     <>
       <style>{TAB_CSS}</style>
-      {/* Responsive values only resolve inside an s-query-container; without one every grid falls back to a single column. */}
-      <s-query-container>
-      <s-grid gridTemplateColumns="@container (inline-size > 760px) 280px minmax(0, 1fr), minmax(0, 1fr)" gap="base" alignItems="start">
-        {/* ---- Left column: inputs and the page's own cards ---- */}
-        <s-stack gap="base">
-          <s-section heading="Generate">
-            <s-stack gap="base">
-              {!configured && (
-                <s-banner tone="warning">AI generation is not configured on this server. Set OPENROUTER_API_KEY and OPENROUTER_MODELS.</s-banner>
-              )}
-              {props.imagesError && <s-banner tone="warning">{props.imagesError}</s-banner>}
-              {errorInGenerate && errorBanner}
-
-              <s-stack gap="small-200">
-                <s-text type="strong">Images</s-text>
-                <s-text color="subdued">
-                  {images.length === 0
-                    ? "No ready images in Shopify. Add one to the product first."
-                    : `${selected.length} of ${maxImages} selected`}
-                </s-text>
-              </s-stack>
-              {images.length > 0 && (
-                <s-grid gridTemplateColumns="repeat(auto-fill, 84px)" gap="small">
-                  {images.map((image, index) => {
-                    const on = selected.includes(image.id);
-                    return (
-                      <s-box key={image.id} padding="small-200" border="base" borderColor={on ? "strong" : "base"} borderRadius="base" background={on ? "subdued" : "base"}>
-                        <s-stack gap="small-200" alignItems="center">
-                          <s-thumbnail src={image.url} alt={image.alt ?? `Product image ${index + 1}`} size="base" />
-                          <s-checkbox
-                            label={`${index + 1}`}
-                            accessibilityLabel={`Use image ${index + 1}`}
-                            checked={on}
-                            disabled={busy || running || (!on && selected.length >= maxImages)}
-                            onChange={(e) => toggle(image.id, e.currentTarget.checked)}
-                          />
-                        </s-stack>
-                      </s-box>
-                    );
-                  })}
-                </s-grid>
-              )}
+      <div className="eh-layout">
+      <div className="eh-cols">
+        {/* ---- Left panel: product, images, inputs, badge, channels, details ---- */}
+        <div className="eh-col">
+          <div className="eh-panel">
+            <div className="eh-hero">
+              {hero ? <img src={hero.url} alt={hero.alt ?? props.productTitle} /> : <div className="eh-hero__empty">No ready images in Shopify. Add one to the product to generate from it.</div>}
+            </div>
+            {images.length > 0 && (
+              <div className="eh-thumbs" role="group" aria-label={`Images for the writer, ${selected.length} of ${maxImages} selected`}>
+                {images.map((image, index) => {
+                  const on = selected.includes(image.id);
+                  return (
+                    <button
+                      key={image.id}
+                      type="button"
+                      className="eh-thumb"
+                      aria-pressed={on}
+                      aria-label={`Image ${index + 1}${on ? ", selected" : ""}`}
+                      disabled={busy || running || (!on && selected.length >= maxImages)}
+                      onClick={() => toggle(image.id, !on)}
+                    >
+                      <img src={image.url} alt="" />
+                      {on && <span className="eh-thumb__tick" aria-hidden="true">✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            <div className="eh-meta">
+              <s-stack direction="inline" gap="small" alignItems="center">{props.statusBadges}</s-stack>
+              <s-text color="subdued">
+                {images.length === 0 ? "No images selected." : `${selected.length} of ${maxImages} images go to the writer.`}
+              </s-text>
               {errors.mediaIds && <s-text tone="critical">{errors.mediaIds}</s-text>}
+              {props.imagesError && <s-text tone="warning">{props.imagesError}</s-text>}
+            </div>
 
-              <s-text-area
-                label="Facts for the writer (optional)"
-                details="Audience, tone, material, benefits, keywords. Generating never changes your Shopify product."
-                value={context}
-                rows={2}
-                maxLength={CONTEXT_MAX}
-                disabled={busy || running}
-                error={errors.merchantContext}
-                onInput={(e) => setContext(e.currentTarget.value)}
-              />
-              {models.length > 1 && (
-                <s-select label="Model" value={model} disabled={busy || running} error={errors.model} onChange={(e) => setModel(e.currentTarget.value)}>
-                  {models.map((m) => (
-                    <s-option key={m} value={m}>
-                      {m}
-                    </s-option>
-                  ))}
-                </s-select>
-              )}
-              <s-button variant={job ? "secondary" : "primary"} disabled={!canGenerate} loading={pending === "generate"} onClick={() => generate("generate")}>
-                {job ? "Generate new" : "Generate description"}
-              </s-button>
-            </s-stack>
-          </s-section>
+            <Collapse title="Generate" hint={configured ? undefined : "not configured"} defaultOpen>
+              <s-stack gap="small">
+                {!configured && <s-banner tone="warning">Set OPENROUTER_API_KEY and OPENROUTER_MODELS on the server.</s-banner>}
+                <s-text-area
+                  label="Facts for the writer (optional)"
+                  details="Audience, tone, material, benefits, keywords."
+                  value={context}
+                  rows={2}
+                  maxLength={CONTEXT_MAX}
+                  disabled={busy || running}
+                  error={errors.merchantContext}
+                  onInput={(e) => setContext(e.currentTarget.value)}
+                />
+                {models.length > 1 && (
+                  <s-select label="Model" value={model} disabled={busy || running} error={errors.model} onChange={(e) => setModel(e.currentTarget.value)}>
+                    {models.map((m) => (
+                      <s-option key={m} value={m}>
+                        {m}
+                      </s-option>
+                    ))}
+                  </s-select>
+                )}
+                <s-button variant={job ? "secondary" : "primary"} disabled={!canGenerate} loading={pending === "generate"} onClick={() => generate("generate")}>
+                  {job ? "Generate new draft" : "Generate description"}
+                </s-button>
+                <s-text color="subdued">Never changes your Shopify product until you apply.</s-text>
+              </s-stack>
+            </Collapse>
 
-          {props.asideTop}
+            {props.badgeEditor && (
+              <Collapse title="Storefront badge" hint={props.badgeHint} defaultOpen>
+                {props.badgeEditor}
+              </Collapse>
+            )}
 
-          {props.canPublish && (
-            <s-section heading="Sales channels">
-              <s-button disabled={busy} loading={pending === "publish"} commandFor={PUBLISH_MODAL} command="--show" onClick={() => channels.load(`${endpoint}?publications=1`)}>
-                Publish to a channel…
-              </s-button>
-              <s-modal id={PUBLISH_MODAL} heading="Publish this product?">
-                <s-stack gap="base">
-                  <s-text color="subdued">Applying a description saves it to the product. Publishing makes the product visible on a channel. They are separate steps.</s-text>
-                  {channels.state !== "idle" && (
-                    <s-stack direction="inline" gap="small" alignItems="center">
-                      <s-spinner size="base" accessibilityLabel="Loading sales channels" />
-                      <s-text>Loading sales channels…</s-text>
-                    </s-stack>
-                  )}
-                  {publicationsError && <s-banner tone="critical">{publicationsError}</s-banner>}
-                  {liveStatus !== "ACTIVE" && (
-                    <s-banner tone="warning">The product is {pretty(liveStatus)}. Shopify only shows Active products, so set it to Active in Shopify first.</s-banner>
-                  )}
-                  {publications.length > 0 && (
-                    <s-select label="Sales channel" value={publicationId} error={errors.publicationId} onChange={(e) => setPublicationId(e.currentTarget.value)}>
-                      {publications.map((p) => (
-                        <s-option key={p.id} value={p.id}>
-                          {p.name}
-                          {p.published ? " (already published)" : ""}
-                        </s-option>
-                      ))}
-                    </s-select>
-                  )}
+            {props.canPublish && (
+              <Collapse title="Sales channels">
+                <s-stack gap="small">
+                  <s-text color="subdued">Applying saves the text to the product. Publishing makes the product visible on a channel.</s-text>
+                  <s-button disabled={busy} loading={pending === "publish"} commandFor={PUBLISH_MODAL} command="--show" onClick={() => channels.load(`${endpoint}?publications=1`)}>
+                    Publish to a channel…
+                  </s-button>
                 </s-stack>
-                <s-button slot="secondary-actions" commandFor={PUBLISH_MODAL} command="--hide">
-                  Cancel
-                </s-button>
-                <s-button
-                  slot="primary-action"
-                  variant="primary"
-                  disabled={!publicationId || liveStatus !== "ACTIVE" || busy}
-                  commandFor={PUBLISH_MODAL}
-                  command="--hide"
-                  onClick={() => send("publish", { publicationId })}
-                >
-                  Publish
-                </s-button>
-              </s-modal>
-            </s-section>
-          )}
-
-          {props.asideBottom}
-        </s-stack>
-
-        {/* ---- Right column: the description workspace, measured by its own container ---- */}
-        <s-query-container>
-          <s-stack gap="base">
-            <s-section heading="Description">
-              <s-stack gap="base">
-                {/* Status + action bar */}
-                <s-stack direction="inline" gap="small" alignItems="center" justifyContent="space-between">
-                  <s-stack direction="inline" gap="small" alignItems="center">
-                    <s-badge tone={mainStatus.tone}>{mainStatus.label}</s-badge>
-                    {running && <s-spinner size="base" accessibilityLabel="Generating" />}
-                    {edited && isDraft && <s-badge tone="info">Unsaved edits</s-badge>}
-                    {job && <s-text color="subdued">Generation #{job.id}</s-text>}
+                <s-modal id={PUBLISH_MODAL} heading="Publish this product?">
+                  <s-stack gap="base">
+                    {channels.state !== "idle" && (
+                      <s-stack direction="inline" gap="small" alignItems="center">
+                        <s-spinner size="base" accessibilityLabel="Loading sales channels" />
+                        <s-text>Loading sales channels…</s-text>
+                      </s-stack>
+                    )}
+                    {publicationsError && <s-banner tone="critical">{publicationsError}</s-banner>}
+                    {liveStatus !== "ACTIVE" && (
+                      <s-banner tone="warning">The product is {pretty(liveStatus)}. Shopify only shows Active products, so set it to Active in Shopify first.</s-banner>
+                    )}
+                    {publications.length > 0 && (
+                      <s-select label="Sales channel" value={publicationId} error={errors.publicationId} onChange={(e) => setPublicationId(e.currentTarget.value)}>
+                        {publications.map((p) => (
+                          <s-option key={p.id} value={p.id}>
+                            {p.name}
+                            {p.published ? " (already published)" : ""}
+                          </s-option>
+                        ))}
+                      </s-select>
+                    )}
                   </s-stack>
-                  {job && !running && (
-                    <s-stack direction="inline" gap="small" alignItems="center">
-                      {isDraft && (
-                        <>
-                          <s-button variant="tertiary" tone="critical" disabled={busy} loading={pending === "reject"} onClick={() => review("reject")}>
-                            Reject
-                          </s-button>
-                          <s-button disabled={busy} loading={pending === "saveDraft"} onClick={() => review("saveDraft")}>
-                            Save draft
-                          </s-button>
-                          <s-button variant="primary" disabled={busy} loading={pending === "approve"} onClick={() => review("approve")}>
-                            Approve
-                          </s-button>
-                        </>
-                      )}
-                      {job.reviewStatus === "APPROVED" && (
-                        <>
-                          <s-button disabled={busy} loading={pending === "reopen"} onClick={() => review("reopen")}>
-                            Edit again
-                          </s-button>
-                          <s-button variant="primary" disabled={busy || !props.canWrite} loading={pending === "apply"} commandFor={APPLY_MODAL} command="--show">
-                            Apply to product…
-                          </s-button>
-                        </>
-                      )}
-                      {(job.reviewStatus === "APPLIED" || job.reviewStatus === "REJECTED" || job.status === "FAILED") && (
-                        <s-button variant={job.reviewStatus === "APPLIED" ? "secondary" : "primary"} disabled={!canGenerate} loading={pending === "regenerate"} onClick={() => generate("regenerate")}>
-                          Regenerate
-                        </s-button>
-                      )}
-                      {(isDraft || job.reviewStatus === "APPROVED") && (
-                        <s-button variant="tertiary" disabled={!canGenerate} loading={pending === "regenerate"} onClick={() => generate("regenerate")}>
-                          Regenerate
-                        </s-button>
-                      )}
-                    </s-stack>
-                  )}
-                </s-stack>
+                  <s-button slot="secondary-actions" commandFor={PUBLISH_MODAL} command="--hide">
+                    Cancel
+                  </s-button>
+                  <s-button
+                    slot="primary-action"
+                    variant="primary"
+                    disabled={!publicationId || liveStatus !== "ACTIVE" || busy}
+                    commandFor={PUBLISH_MODAL}
+                    command="--hide"
+                    onClick={() => send("publish", { publicationId })}
+                  >
+                    Publish
+                  </s-button>
+                </s-modal>
+              </Collapse>
+            )}
 
-                {!errorInGenerate && errorBanner}
+            {props.productDetails && <Collapse title="Product details">{props.productDetails}</Collapse>}
+          </div>
+        </div>
+
+        {/* ---- Right: description panel (scrolls inside) + history panel ---- */}
+        <div className="eh-work">
+          <div className="eh-panel eh-panel--desc">
+            <div className="eh-panel__head">
+              <s-stack direction="inline" gap="small" alignItems="center">
+                <span className="eh-panel__title">Description</span>
+                <s-badge tone={mainStatus.tone}>{mainStatus.label}</s-badge>
+                {running && <s-spinner size="base" accessibilityLabel="Generating" />}
+                {edited && isDraft && <s-badge tone="info">Unsaved edits</s-badge>}
+                {job && <s-text color="subdued">#{job.id}</s-text>}
+              </s-stack>
+              {job && !running && (
+                <div className="eh-actions">
+                  {isDraft && (
+                    <>
+                      <s-button variant="tertiary" tone="critical" disabled={busy} loading={pending === "reject"} onClick={() => review("reject")}>
+                        Reject
+                      </s-button>
+                      <s-button variant="tertiary" disabled={!canGenerate} loading={pending === "regenerate"} onClick={() => generate("regenerate")}>
+                        Regenerate
+                      </s-button>
+                      <s-button disabled={busy} loading={pending === "saveDraft"} onClick={() => review("saveDraft")}>
+                        Save draft
+                      </s-button>
+                      <s-button variant="primary" disabled={busy} loading={pending === "approve"} onClick={() => review("approve")}>
+                        Approve
+                      </s-button>
+                    </>
+                  )}
+                  {job.reviewStatus === "APPROVED" && (
+                    <>
+                      <s-button variant="tertiary" disabled={!canGenerate} loading={pending === "regenerate"} onClick={() => generate("regenerate")}>
+                        Regenerate
+                      </s-button>
+                      <s-button disabled={busy} loading={pending === "reopen"} onClick={() => review("reopen")}>
+                        Edit again
+                      </s-button>
+                      <s-button variant="primary" disabled={busy || !props.canWrite} loading={pending === "apply"} commandFor={APPLY_MODAL} command="--show">
+                        Apply to product…
+                      </s-button>
+                    </>
+                  )}
+                  {(job.reviewStatus === "APPLIED" || job.reviewStatus === "REJECTED" || job.status === "FAILED") && (
+                    <s-button variant={job.reviewStatus === "APPLIED" ? "secondary" : "primary"} disabled={!canGenerate} loading={pending === "regenerate"} onClick={() => generate("regenerate")}>
+                      Regenerate
+                    </s-button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {job?.status === "SUCCEEDED" && (
+              <Tabs
+                label="Description views"
+                value={tab}
+                onChange={setTab}
+                tabs={[
+                  { id: "description", label: "Description" },
+                  { id: "html", label: isDraft ? "Edit HTML" : "HTML" },
+                  { id: "seo", label: "SEO suggestions" },
+                ]}
+              />
+            )}
+
+            <div className="eh-panel__body">
+              <s-stack gap="base">
                 {result && !result.ok && result.code === "STALE" && (
                   <s-banner tone="critical" heading="The product changed in Shopify">
                     Someone edited this product&apos;s description after this text was generated. Reload the page to see the current text, or regenerate from it.
@@ -474,7 +570,6 @@ export function AiDescriptionSection(props: Props) {
                     {job.error ?? "Unknown error"}. Nothing was changed. You can regenerate.
                   </s-banner>
                 )}
-                {job?.reviewStatus === "APPLIED" && <s-banner tone="success">Saved to the Shopify product. Publishing to a sales channel is a separate step.</s-banner>}
                 {job?.reviewStatus === "APPLYING" && (
                   <s-stack direction="inline" gap="small" alignItems="center">
                     <s-spinner size="base" accessibilityLabel="Writing to Shopify" />
@@ -494,109 +589,91 @@ export function AiDescriptionSection(props: Props) {
                 {!job && (
                   <s-box padding="large" border="base" borderStyle="dashed" borderRadius="base">
                     <s-stack gap="small-200" alignItems="center">
-                      <s-text type="strong">No description generated yet</s-text>
-                      <s-text color="subdued">Pick images and facts on the left, then generate. The draft appears here for review.</s-text>
+                      <s-text type="strong">No description yet</s-text>
+                      <s-text color="subdued">Choose images on the left, add facts if you have them, and generate. The draft appears here for review.</s-text>
                     </s-stack>
                   </s-box>
                 )}
                 {running && (
-                  <s-box padding="base" border="base" borderRadius="base">
-                    <div className="eh-skeleton" aria-busy="true" aria-label="Writing the description">
-                      <span style={{ width: "92%" }} />
-                      <span style={{ width: "100%" }} />
-                      <span style={{ width: "78%" }} />
-                      <span style={{ width: "60%", marginTop: 6 }} />
-                      <span style={{ width: "66%" }} />
-                      <span style={{ width: "54%" }} />
-                    </div>
-                    <s-text color="subdued">Writing the description. Usually 5 to 30 seconds; this page updates by itself.</s-text>
-                  </s-box>
+                  <div className="eh-skeleton" aria-busy="true" aria-label="Writing the description">
+                    <span style={{ width: "92%" }} />
+                    <span style={{ width: "100%" }} />
+                    <span style={{ width: "78%" }} />
+                    <span style={{ width: "60%", marginTop: 6 }} />
+                    <span style={{ width: "66%" }} />
+                    <span style={{ width: "54%" }} />
+                  </div>
                 )}
+                {running && <s-text color="subdued">Writing the description. Usually 5 to 30 seconds; this panel updates by itself.</s-text>}
 
-                {job?.status === "SUCCEEDED" && (
-                  <>
-                    <Tabs
-                      label="Description views"
-                      value={tab}
-                      onChange={setTab}
-                      tabs={[
-                        { id: "description", label: "Description" },
-                        { id: "html", label: isDraft ? "Edit HTML" : "HTML" },
-                        { id: "seo", label: "SEO suggestions" },
-                      ]}
-                    />
-                    {tab === "description" && (
-                      <Panel id={`${panelBase}-description-panel`}>
-                        <s-box padding="large" border="base" borderRadius="base">
-                          {/* Safe: `preview` went through the same allowlist sanitizer the server uses. */}
-                          <div className="eh-rich" dangerouslySetInnerHTML={{ __html: preview || "<p><em>Empty description.</em></p>" }} />
-                        </s-box>
-                      </Panel>
-                    )}
-                    {tab === "html" && (
-                      <Panel id={`${panelBase}-html-panel`}>
-                        <s-stack gap="small">
-                          <s-grid gridTemplateColumns="@container (inline-size > 720px) 1fr 1fr, 1fr" gap="base">
-                            <s-text-area
-                              label="Description HTML"
-                              details="Allowed: p, h2-h4, ul, ol, li, strong, em, br. Anything else is removed when saved."
-                              value={draft}
-                              rows={12}
-                              maxLength={HTML_MAX}
-                              readOnly={!isDraft}
-                              error={errors.descriptionHtml}
-                              onInput={(e) => onType(e.currentTarget.value)}
-                            />
-                            <s-stack gap="small-200">
-                              <s-stack direction="inline" gap="small" alignItems="center" justifyContent="space-between">
-                                <s-text type="strong">Preview</s-text>
-                                <span className="eh-live" data-live={typing} aria-live="polite">
-                                  <i aria-hidden="true" />
-                                  {typing ? "Updating" : `${words} words`}
-                                </span>
-                              </s-stack>
-                              <div className="eh-preview" data-live={typing}>
-                                <s-box padding="base" border="base" borderRadius="base" background="subdued">
-                                  <div className="eh-rich" dangerouslySetInnerHTML={{ __html: preview }} />
-                                </s-box>
-                              </div>
-                            </s-stack>
-                          </s-grid>
-                          {!isDraft && <s-text color="subdued">Read-only in this state. Use Edit again (approved) or Regenerate to change the text.</s-text>}
-                          {isDraft && edited && (
-                            <s-button variant="tertiary" disabled={busy} onClick={() => setDraft(job.generated!.descriptionHtml)}>
-                              Reset to generated text
-                            </s-button>
-                          )}
+                {job?.status === "SUCCEEDED" && tab === "description" && (
+                  <Panel id={`${panelBase}-description-panel`}>
+                    {/* Safe: `preview` went through the same allowlist sanitizer the server uses. */}
+                    <div className="eh-rich" dangerouslySetInnerHTML={{ __html: preview || "<p><em>Empty description.</em></p>" }} />
+                  </Panel>
+                )}
+                {job?.status === "SUCCEEDED" && tab === "html" && (
+                  <Panel id={`${panelBase}-html-panel`}>
+                    <s-stack gap="small">
+                      <div className="eh-split">
+                        <s-text-area
+                          label="Description HTML"
+                          details="Allowed: p, h2-h4, ul, ol, li, strong, em, br. Anything else is removed when saved."
+                          value={draft}
+                          rows={12}
+                          maxLength={HTML_MAX}
+                          readOnly={!isDraft}
+                          error={errors.descriptionHtml}
+                          onInput={(e) => onType(e.currentTarget.value)}
+                        />
+                        <s-stack gap="small-200">
+                          <s-stack direction="inline" gap="small" alignItems="center" justifyContent="space-between">
+                            <s-text type="strong">Preview</s-text>
+                            <span className="eh-live" data-live={typing} aria-live="polite">
+                              <i aria-hidden="true" />
+                              {typing ? "Updating" : `${words} words`}
+                            </span>
+                          </s-stack>
+                          <div className="eh-preview" data-live={typing}>
+                            <s-box padding="base" border="base" borderRadius="base" background="subdued">
+                              <div className="eh-rich" dangerouslySetInnerHTML={{ __html: preview }} />
+                            </s-box>
+                          </div>
                         </s-stack>
-                      </Panel>
-                    )}
-                    {tab === "seo" && job.generated && (
-                      <Panel id={`${panelBase}-seo-panel`}>
-                        <s-stack gap="small">
-                          <s-text color="subdued">Suggestions only. They are shown here and never written to Shopify.</s-text>
-                          <s-grid gridTemplateColumns="@container (inline-size > 560px) 140px 1fr, 1fr" gap="small">
-                            <s-text color="subdued">SEO title</s-text>
-                            <s-text>{job.generated.seoTitle}</s-text>
-                            <s-text color="subdued">SEO description</s-text>
-                            <s-text>{job.generated.seoDescription}</s-text>
-                            <s-text color="subdued">Short description</s-text>
-                            <s-text>{job.generated.shortDescription}</s-text>
-                            {job.generated.highlights.length > 0 && (
-                              <>
-                                <s-text color="subdued">Highlights</s-text>
-                                <s-unordered-list>
-                                  {job.generated.highlights.map((h) => (
-                                    <s-list-item key={h}>{h}</s-list-item>
-                                  ))}
-                                </s-unordered-list>
-                              </>
-                            )}
-                          </s-grid>
-                        </s-stack>
-                      </Panel>
-                    )}
-                  </>
+                      </div>
+                      {!isDraft && <s-text color="subdued">Read-only in this state. Use Edit again (approved) or Regenerate to change the text.</s-text>}
+                      {isDraft && edited && (
+                        <s-button variant="tertiary" disabled={busy} onClick={() => setDraft(job.generated!.descriptionHtml)}>
+                          Reset to generated text
+                        </s-button>
+                      )}
+                    </s-stack>
+                  </Panel>
+                )}
+                {job?.status === "SUCCEEDED" && tab === "seo" && job.generated && (
+                  <Panel id={`${panelBase}-seo-panel`}>
+                    <s-stack gap="small">
+                      <s-text color="subdued">Suggestions only. They are shown here and never written to Shopify.</s-text>
+                      <div className="eh-kv">
+                        <s-text color="subdued">SEO title</s-text>
+                        <s-text>{job.generated.seoTitle}</s-text>
+                        <s-text color="subdued">SEO description</s-text>
+                        <s-text>{job.generated.seoDescription}</s-text>
+                        <s-text color="subdued">Short description</s-text>
+                        <s-text>{job.generated.shortDescription}</s-text>
+                        {job.generated.highlights.length > 0 && (
+                          <>
+                            <s-text color="subdued">Highlights</s-text>
+                            <s-unordered-list>
+                              {job.generated.highlights.map((h) => (
+                                <s-list-item key={h}>{h}</s-list-item>
+                              ))}
+                            </s-unordered-list>
+                          </>
+                        )}
+                      </div>
+                    </s-stack>
+                  </Panel>
                 )}
 
                 {job && (
@@ -605,7 +682,7 @@ export function AiDescriptionSection(props: Props) {
                       {detailsOpen ? "Hide generation details" : "Generation details"}
                     </s-button>
                     {detailsOpen && (
-                      <s-grid gridTemplateColumns="@container (inline-size > 560px) 140px 1fr, 1fr" gap="small-200">
+                      <div className="eh-kv eh-fade">
                         <s-text color="subdued">Generation</s-text>
                         <s-text>#{job.id}{job.previousGenerationId ? ` (regenerated from #${job.previousGenerationId})` : ""}</s-text>
                         <s-text color="subdued">State</s-text>
@@ -627,167 +704,174 @@ export function AiDescriptionSection(props: Props) {
                         <s-text>{job.usage?.generationId ?? "—"}</s-text>
                         <s-text color="subdued">Created</s-text>
                         <s-text>{when(job.createdAt)}</s-text>
-                      </s-grid>
+                      </div>
                     )}
                   </s-stack>
                 )}
               </s-stack>
+            </div>
 
-              <s-modal id={APPLY_MODAL} heading="Replace the product description?" size="large">
-                <s-stack gap="base">
-                  <s-paragraph>
-                    The current description in Shopify will be replaced by the approved text. The previous text is kept in Versions and can be restored.
-                  </s-paragraph>
-                  <s-grid gridTemplateColumns="@container (inline-size > 640px) 1fr 1fr, 1fr" gap="base">
-                    <s-stack gap="small-200">
-                      <s-text type="strong">Previous (last known)</s-text>
-                      <s-box padding="base" border="base" borderRadius="base" background="subdued">
-                        <div className="eh-rich" dangerouslySetInnerHTML={{ __html: sanitizeHtml(versions[0]?.descriptionHtml ?? "") || "<p><em>Not recorded by this app yet.</em></p>" }} />
-                      </s-box>
-                    </s-stack>
-                    <s-stack gap="small-200">
-                      <s-text type="strong">New</s-text>
-                      <s-box padding="base" border="base" borderRadius="base">
-                        <div className="eh-rich" dangerouslySetInnerHTML={{ __html: preview }} />
-                      </s-box>
-                    </s-stack>
-                  </s-grid>
-                </s-stack>
-                <s-button slot="secondary-actions" commandFor={APPLY_MODAL} command="--hide">
-                  Cancel
-                </s-button>
-                <s-button slot="primary-action" variant="primary" loading={pending === "apply"} disabled={busy} commandFor={APPLY_MODAL} command="--hide" onClick={() => review("apply")}>
-                  Apply to Shopify
-                </s-button>
-              </s-modal>
-            </s-section>
-
-            {(history.length > 0 || versions.length > 0) && (
-              <s-section heading="History">
-                <Tabs
-                  label="History views"
-                  value={historyTab}
-                  onChange={setHistoryTab}
-                  tabs={[
-                    { id: "generations", label: `Generations (${history.length})` },
-                    { id: "versions", label: `Written to Shopify (${versions.length})` },
-                  ]}
-                />
-                {historyTab === "generations" && (
-                  <Panel id={`${panelBase}-generations-panel`}>
-                    {history.length === 0 ? (
-                      <s-text color="subdued">No generations yet.</s-text>
-                    ) : (
-                      <s-table>
-                        <s-table-header-row>
-                          <s-table-header listSlot="primary">Generation</s-table-header>
-                          <s-table-header listSlot="secondary">Created</s-table-header>
-                          <s-table-header listSlot="labeled">Model</s-table-header>
-                          <s-table-header listSlot="inline">Status</s-table-header>
-                          <s-table-header listSlot="inline">Actions</s-table-header>
-                        </s-table-header-row>
-                        <s-table-body>
-                          {history.map((item) => {
-                            const status = aiStatusLabel(item);
-                            return (
-                              <s-table-row key={item.id}>
-                                <s-table-cell>#{item.id}</s-table-cell>
-                                <s-table-cell>{when(item.createdAt)}</s-table-cell>
-                                <s-table-cell>{item.model}</s-table-cell>
-                                <s-table-cell>
-                                  <s-badge tone={status.tone}>{status.label}</s-badge>
-                                </s-table-cell>
-                                <s-table-cell>
-                                  {item.id === job?.id ? (
-                                    <s-text color="subdued">Open</s-text>
-                                  ) : (
-                                    <s-button variant="tertiary" disabled={busy} onClick={() => poll.load(`${endpoint}?jobId=${item.id}`)}>
-                                      View
-                                    </s-button>
-                                  )}
-                                </s-table-cell>
-                              </s-table-row>
-                            );
-                          })}
-                        </s-table-body>
-                      </s-table>
-                    )}
-                  </Panel>
-                )}
-                {historyTab === "versions" && (
-                  <Panel id={`${panelBase}-versions-panel`}>
-                    {versions.length === 0 ? (
-                      <s-text color="subdued">This app has not written a description to Shopify yet.</s-text>
-                    ) : (
-                      <s-table>
-                        <s-table-header-row>
-                          <s-table-header listSlot="primary">Version</s-table-header>
-                          <s-table-header listSlot="secondary">Applied</s-table-header>
-                          <s-table-header listSlot="labeled">Source</s-table-header>
-                          <s-table-header listSlot="labeled">By</s-table-header>
-                          <s-table-header listSlot="inline">Actions</s-table-header>
-                        </s-table-header-row>
-                        <s-table-body>
-                          {versions.map((v, index) => (
-                            <s-table-row key={v.id}>
-                              <s-table-cell>
-                                <s-stack direction="inline" gap="small" alignItems="center">
-                                  <s-text>v{v.id}</s-text>
-                                  {index === 0 && <s-badge tone="success">Current</s-badge>}
-                                </s-stack>
-                              </s-table-cell>
-                              <s-table-cell>{when(v.appliedAt)}</s-table-cell>
-                              <s-table-cell>{v.source === "RESTORE" ? `Restored from v${v.restoredFromVersionId}` : `Generation #${v.generationId}`}</s-table-cell>
-                              <s-table-cell>{v.appliedBy.replace(/^admin:/, "")}</s-table-cell>
-                              <s-table-cell>
-                                <s-stack direction="inline" gap="small">
-                                  {index > 0 && props.canWrite && (
-                                    <s-button variant="tertiary" disabled={busy} commandFor={RESTORE_MODAL} command="--show" onClick={() => setRestoreTarget({ versionId: v.id, which: "written", html: v.descriptionHtml })}>
-                                      Restore
-                                    </s-button>
-                                  )}
-                                  {index === 0 && v.previousDescriptionHtml && props.canWrite && (
-                                    <s-button variant="tertiary" disabled={busy} commandFor={RESTORE_MODAL} command="--show" onClick={() => setRestoreTarget({ versionId: v.id, which: "previous", html: v.previousDescriptionHtml! })}>
-                                      Restore what it replaced
-                                    </s-button>
-                                  )}
-                                </s-stack>
-                              </s-table-cell>
-                            </s-table-row>
-                          ))}
-                        </s-table-body>
-                      </s-table>
-                    )}
-                  </Panel>
-                )}
-                <s-modal id={RESTORE_MODAL} heading="Restore this description?" size="large">
-                  <s-stack gap="base">
-                    <s-paragraph>The current Shopify description will be replaced by the text below. This creates a new version; nothing in the history is deleted.</s-paragraph>
+            <s-modal id={APPLY_MODAL} heading="Replace the product description?" size="large">
+              <s-stack gap="base">
+                <s-paragraph>
+                  The current description in Shopify will be replaced by the approved text. The previous text is kept in History and can be restored.
+                </s-paragraph>
+                <div className="eh-split">
+                  <s-stack gap="small-200">
+                    <s-text type="strong">Previous (last known)</s-text>
                     <s-box padding="base" border="base" borderRadius="base" background="subdued">
-                      <div className="eh-rich" dangerouslySetInnerHTML={{ __html: sanitizeHtml(restoreTarget?.html ?? "") }} />
+                      <div className="eh-rich" dangerouslySetInnerHTML={{ __html: sanitizeHtml(versions[0]?.descriptionHtml ?? "") || "<p><em>Not recorded by this app yet.</em></p>" }} />
                     </s-box>
                   </s-stack>
-                  <s-button slot="secondary-actions" commandFor={RESTORE_MODAL} command="--hide">
-                    Cancel
-                  </s-button>
-                  <s-button
-                    slot="primary-action"
-                    variant="primary"
-                    disabled={!restoreTarget || busy}
-                    loading={pending === "restore"}
-                    commandFor={RESTORE_MODAL}
-                    command="--hide"
-                    onClick={() => restoreTarget && send("restore", { versionId: String(restoreTarget.versionId), which: restoreTarget.which })}
-                  >
-                    Restore in Shopify
-                  </s-button>
-                </s-modal>
-              </s-section>
-            )}
-          </s-stack>
-        </s-query-container>
-      </s-grid>
-      </s-query-container>
+                  <s-stack gap="small-200">
+                    <s-text type="strong">New</s-text>
+                    <s-box padding="base" border="base" borderRadius="base">
+                      <div className="eh-rich" dangerouslySetInnerHTML={{ __html: preview }} />
+                    </s-box>
+                  </s-stack>
+                </div>
+              </s-stack>
+              <s-button slot="secondary-actions" commandFor={APPLY_MODAL} command="--hide">
+                Cancel
+              </s-button>
+              <s-button slot="primary-action" variant="primary" loading={pending === "apply"} disabled={busy} commandFor={APPLY_MODAL} command="--hide" onClick={() => review("apply")}>
+                Apply to Shopify
+              </s-button>
+            </s-modal>
+          </div>
+
+          <div className="eh-panel eh-panel--hist">
+            <div className="eh-panel__head">
+              <span className="eh-panel__title">History</span>
+            </div>
+            <Tabs
+              label="History views"
+              value={historyTab}
+              onChange={setHistoryTab}
+              tabs={[
+                { id: "generations", label: `Generations (${history.length})` },
+                { id: "versions", label: `Written to Shopify (${versions.length})` },
+              ]}
+            />
+            <div className="eh-panel__body eh-panel__body--flush">
+              {historyTab === "generations" && (
+                <Panel id={`${panelBase}-generations-panel`}>
+                  {history.length === 0 ? (
+                    <s-box padding="base">
+                      <s-text color="subdued">No generations yet.</s-text>
+                    </s-box>
+                  ) : (
+                    <s-table>
+                      <s-table-header-row>
+                        <s-table-header listSlot="primary">Generation</s-table-header>
+                        <s-table-header listSlot="secondary">Created</s-table-header>
+                        <s-table-header listSlot="labeled">Model</s-table-header>
+                        <s-table-header listSlot="inline">Status</s-table-header>
+                        <s-table-header listSlot="inline">Actions</s-table-header>
+                      </s-table-header-row>
+                      <s-table-body>
+                        {history.map((item) => {
+                          const status = aiStatusLabel(item);
+                          return (
+                            <s-table-row key={item.id}>
+                              <s-table-cell>#{item.id}</s-table-cell>
+                              <s-table-cell>{when(item.createdAt)}</s-table-cell>
+                              <s-table-cell>{item.model}</s-table-cell>
+                              <s-table-cell>
+                                <s-badge tone={status.tone}>{status.label}</s-badge>
+                              </s-table-cell>
+                              <s-table-cell>
+                                {item.id === job?.id ? (
+                                  <s-text color="subdued">Open</s-text>
+                                ) : (
+                                  <s-button variant="tertiary" disabled={busy} onClick={() => poll.load(`${endpoint}?jobId=${item.id}`)}>
+                                    View
+                                  </s-button>
+                                )}
+                              </s-table-cell>
+                            </s-table-row>
+                          );
+                        })}
+                      </s-table-body>
+                    </s-table>
+                  )}
+                </Panel>
+              )}
+              {historyTab === "versions" && (
+                <Panel id={`${panelBase}-versions-panel`}>
+                  {versions.length === 0 ? (
+                    <s-box padding="base">
+                      <s-text color="subdued">This app has not written a description to Shopify yet.</s-text>
+                    </s-box>
+                  ) : (
+                    <s-table>
+                      <s-table-header-row>
+                        <s-table-header listSlot="primary">Version</s-table-header>
+                        <s-table-header listSlot="secondary">Applied</s-table-header>
+                        <s-table-header listSlot="labeled">Source</s-table-header>
+                        <s-table-header listSlot="labeled">By</s-table-header>
+                        <s-table-header listSlot="inline">Actions</s-table-header>
+                      </s-table-header-row>
+                      <s-table-body>
+                        {versions.map((v, index) => (
+                          <s-table-row key={v.id}>
+                            <s-table-cell>
+                              <s-stack direction="inline" gap="small" alignItems="center">
+                                <s-text>v{v.id}</s-text>
+                                {index === 0 && <s-badge tone="success">Current</s-badge>}
+                              </s-stack>
+                            </s-table-cell>
+                            <s-table-cell>{when(v.appliedAt)}</s-table-cell>
+                            <s-table-cell>{v.source === "RESTORE" ? `Restored from v${v.restoredFromVersionId}` : `Generation #${v.generationId}`}</s-table-cell>
+                            <s-table-cell>{v.appliedBy.replace(/^admin:/, "")}</s-table-cell>
+                            <s-table-cell>
+                              <s-stack direction="inline" gap="small">
+                                {index > 0 && props.canWrite && (
+                                  <s-button variant="tertiary" disabled={busy} commandFor={RESTORE_MODAL} command="--show" onClick={() => setRestoreTarget({ versionId: v.id, which: "written", html: v.descriptionHtml })}>
+                                    Restore
+                                  </s-button>
+                                )}
+                                {index === 0 && v.previousDescriptionHtml && props.canWrite && (
+                                  <s-button variant="tertiary" disabled={busy} commandFor={RESTORE_MODAL} command="--show" onClick={() => setRestoreTarget({ versionId: v.id, which: "previous", html: v.previousDescriptionHtml! })}>
+                                    Restore what it replaced
+                                  </s-button>
+                                )}
+                              </s-stack>
+                            </s-table-cell>
+                          </s-table-row>
+                        ))}
+                      </s-table-body>
+                    </s-table>
+                  )}
+                </Panel>
+              )}
+            </div>
+            <s-modal id={RESTORE_MODAL} heading="Restore this description?" size="large">
+              <s-stack gap="base">
+                <s-paragraph>The current Shopify description will be replaced by the text below. This creates a new version; nothing in the history is deleted.</s-paragraph>
+                <s-box padding="base" border="base" borderRadius="base" background="subdued">
+                  <div className="eh-rich" dangerouslySetInnerHTML={{ __html: sanitizeHtml(restoreTarget?.html ?? "") }} />
+                </s-box>
+              </s-stack>
+              <s-button slot="secondary-actions" commandFor={RESTORE_MODAL} command="--hide">
+                Cancel
+              </s-button>
+              <s-button
+                slot="primary-action"
+                variant="primary"
+                disabled={!restoreTarget || busy}
+                loading={pending === "restore"}
+                commandFor={RESTORE_MODAL}
+                command="--hide"
+                onClick={() => restoreTarget && send("restore", { versionId: String(restoreTarget.versionId), which: restoreTarget.which })}
+              >
+                Restore in Shopify
+              </s-button>
+            </s-modal>
+          </div>
+        </div>
+      </div>
+      </div>
     </>
   );
 }

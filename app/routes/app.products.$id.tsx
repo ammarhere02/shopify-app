@@ -19,6 +19,7 @@ import {
 import { logger } from "../lib/logger.server";
 import { AiConfigError, loadAiConfig } from "../ai/config.server";
 import { AiDescriptionSection } from "../components/AiDescriptionSection";
+import { Notice, useNotice } from "../components/Notice";
 import type { AiImage } from "../components/AiDescriptionSection";
 import { getJob, listJobsForProduct } from "../repositories/ai-generation.server";
 import {
@@ -146,7 +147,6 @@ export default function ProductDetail() {
   const busy = fetcher.state !== "idle";
   const pending = fetcher.formData?.get("intent");
   const errors: Record<string, string> = fetcher.data?.errors ?? {};
-  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const [badgeText, setBadgeText] = useState(enrichment?.badgeText ?? "");
   const [badgeColor, setBadgeColor] = useState(
@@ -157,10 +157,11 @@ export default function ProductDetail() {
   );
   const [active, setActive] = useState(enrichment?.active ?? true);
 
-  // Success is a toast; validation errors stay next to the fields.
+  // Result banner at the top of the page; field errors also stay next to the fields.
+  const { notice, show, clear } = useNotice();
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data?.ok) shopify.toast.show(fetcher.data.message);
-  }, [fetcher.state, fetcher.data]);
+    if (fetcher.state === "idle" && fetcher.data) show(fetcher.data.ok ? "success" : "critical", fetcher.data.message);
+  }, [fetcher.state, fetcher.data, show]);
 
   const save = () =>
     fetcher.submit(
@@ -174,104 +175,106 @@ export default function ProductDetail() {
       { method: "post" },
     );
 
-  // Rendered exactly once: inside the AI workspace's left column, or on its own for a deleted product.
+  // Rendered exactly once: inside the workspace's left panel, or on its own for a deleted product.
   const badgeEditor = (
-    <s-section heading="Storefront badge">
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          save();
-        }}
-      >
-        <s-stack gap="small">
-          {fetcher.data && !fetcher.data.ok && <s-banner tone="critical">{fetcher.data.message}</s-banner>}
-          <s-text-field
-            label="Badge text"
-            value={badgeText}
-            maxLength={BADGE_TEXT_MAX}
-            required
-            disabled={busy}
-            error={errors.badgeText}
-            onInput={(e) => setBadgeText(e.currentTarget.value)}
-          />
-          <s-color-field
-            label="Colour"
-            value={badgeColor}
-            disabled={busy}
-            error={errors.badgeColor}
-            onChange={(e) => setBadgeColor(e.currentTarget.value)}
-          />
-          <s-checkbox
-            label="Show on storefront"
-            checked={active}
-            disabled={busy}
-            onChange={(e) => setActive(e.currentTarget.checked)}
-          />
-          <s-text-area
-            label="Internal note"
-            details="Private. Never sent to the storefront."
-            value={internalNote}
-            rows={1}
-            disabled={busy}
-            error={errors.internalNote}
-            onInput={(e) => setInternalNote(e.currentTarget.value)}
-          />
-          <s-stack direction="inline" gap="small" alignItems="center">
-            <s-button variant="primary" type="submit" loading={pending === "save"} disabled={busy}>
-              {enrichment ? "Save badge" : "Add badge"}
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        save();
+      }}
+    >
+      <s-stack gap="small">
+        <s-text-field
+          label="Badge text"
+          value={badgeText}
+          maxLength={BADGE_TEXT_MAX}
+          required
+          disabled={busy}
+          error={errors.badgeText}
+          onInput={(e) => setBadgeText(e.currentTarget.value)}
+        />
+        <s-color-field
+          label="Colour"
+          value={badgeColor}
+          disabled={busy}
+          error={errors.badgeColor}
+          onChange={(e) => setBadgeColor(e.currentTarget.value)}
+        />
+        <s-checkbox
+          label="Show on storefront"
+          checked={active}
+          disabled={busy}
+          onChange={(e) => setActive(e.currentTarget.checked)}
+        />
+        <s-text-area
+          label="Internal note"
+          details="Private. Never sent to the storefront."
+          value={internalNote}
+          rows={1}
+          disabled={busy}
+          error={errors.internalNote}
+          onInput={(e) => setInternalNote(e.currentTarget.value)}
+        />
+        <s-stack direction="inline" gap="small" alignItems="center">
+          <s-button variant="primary" type="submit" loading={pending === "save"} disabled={busy}>
+            {enrichment ? "Save badge" : "Add badge"}
+          </s-button>
+          {enrichment && (
+            <s-button
+              tone="critical"
+              variant="tertiary"
+              loading={pending === "remove"}
+              disabled={busy}
+              onClick={() =>
+                fetcher.submit({ intent: "remove" }, { method: "post" })
+              }
+            >
+              Remove
             </s-button>
-            {enrichment && (
-              <s-button
-                tone="critical"
-                variant="tertiary"
-                loading={pending === "remove"}
-                disabled={busy}
-                onClick={() =>
-                  fetcher.submit({ intent: "remove" }, { method: "post" })
-                }
-              >
-                Remove
-              </s-button>
-            )}
-          </s-stack>
+          )}
         </s-stack>
-      </form>
-    </s-section>
+      </s-stack>
+    </form>
   );
 
   const details = (
-    <s-section heading="Product details">
-      <s-stack gap="small">
-        <s-button variant="tertiary" onClick={() => setDetailsOpen((v) => !v)}>
-          {detailsOpen ? "Hide details" : `Show details (${product.variants.length} variant${product.variants.length === 1 ? "" : "s"})`}
-        </s-button>
-        {detailsOpen && (
-          <s-stack gap="small">
-            <s-text color="subdued">{product.shopifyProductGid.replace("gid://shopify/Product/", "Shopify ID ")} · read-only copy from the last sync</s-text>
-            {product.variants.length === 0 ? (
-              <s-text color="subdued">No variants synced.</s-text>
-            ) : (
-              <s-table>
-                <s-table-header-row>
-                  <s-table-header listSlot="primary">Variant</s-table-header>
-                  <s-table-header listSlot="secondary">SKU</s-table-header>
-                  <s-table-header listSlot="inline" format="numeric">Price</s-table-header>
-                </s-table-header-row>
-                <s-table-body>
-                  {product.variants.map((v) => (
-                    <s-table-row key={v.id}>
-                      <s-table-cell>{v.title}</s-table-cell>
-                      <s-table-cell>{v.sku || "—"}</s-table-cell>
-                      <s-table-cell>{v.price}</s-table-cell>
-                    </s-table-row>
-                  ))}
-                </s-table-body>
-              </s-table>
-            )}
-          </s-stack>
-        )}
-      </s-stack>
-    </s-section>
+    <s-stack gap="small">
+      <s-text color="subdued">{product.shopifyProductGid.replace("gid://shopify/Product/", "Shopify ID ")} · read-only copy from the last sync</s-text>
+      {product.variants.length === 0 ? (
+        <s-text color="subdued">No variants synced.</s-text>
+      ) : (
+        <s-table>
+          <s-table-header-row>
+            <s-table-header listSlot="primary">Variant</s-table-header>
+            <s-table-header listSlot="secondary">SKU</s-table-header>
+            <s-table-header listSlot="inline" format="numeric">Price</s-table-header>
+          </s-table-header-row>
+          <s-table-body>
+            {product.variants.map((v) => (
+              <s-table-row key={v.id}>
+                <s-table-cell>{v.title}</s-table-cell>
+                <s-table-cell>{v.sku || "—"}</s-table-cell>
+                <s-table-cell>{v.price}</s-table-cell>
+              </s-table-row>
+            ))}
+          </s-table-body>
+        </s-table>
+      )}
+    </s-stack>
+  );
+
+  const statusBadges = (
+    <>
+      <s-badge tone={STATUS_TONE[product.status as keyof typeof STATUS_TONE] ?? "neutral"}>
+        {product.status.charAt(0) + product.status.slice(1).toLowerCase()}
+      </s-badge>
+      {product.deleted && <s-badge tone="warning">Deleted in Shopify</s-badge>}
+      {enrichment && (
+        <s-badge tone={enrichment.active ? "success" : "neutral"}>
+          {enrichment.active ? "Badge live" : "Badge inactive"}
+        </s-badge>
+      )}
+    </>
   );
 
   return (
@@ -280,18 +283,7 @@ export default function ProductDetail() {
         Products
       </s-link>
 
-      <s-stack direction="inline" gap="small" alignItems="center">
-        {ai.images[0] && <s-thumbnail src={ai.images[0].url} alt={ai.images[0].alt ?? product.title} size="small" />}
-        <s-badge tone={STATUS_TONE[product.status as keyof typeof STATUS_TONE] ?? "neutral"}>
-          {product.status.charAt(0) + product.status.slice(1).toLowerCase()}
-        </s-badge>
-        {product.deleted && <s-badge tone="warning">Deleted in Shopify</s-badge>}
-        {enrichment && (
-          <s-badge tone={enrichment.active ? "success" : "neutral"}>
-            {enrichment.active ? "Badge live" : "Badge inactive"}
-          </s-badge>
-        )}
-      </s-stack>
+      <Notice notice={notice} onDismiss={clear} />
 
       {product.deleted && (
         <s-banner tone="warning">
@@ -301,17 +293,16 @@ export default function ProductDetail() {
       )}
 
       {product.deleted ? (
-        <s-query-container>
-          <s-grid gridTemplateColumns="@container (inline-size > 760px) 280px minmax(0, 1fr), minmax(0, 1fr)" gap="base" alignItems="start">
-            <s-stack gap="base">
-              {badgeEditor}
-              {details}
-            </s-stack>
-          </s-grid>
-        </s-query-container>
+        <s-stack gap="base">
+          <s-stack direction="inline" gap="small" alignItems="center">{statusBadges}</s-stack>
+          <s-section heading="Storefront badge">{badgeEditor}</s-section>
+          <s-section heading="Product details">{details}</s-section>
+        </s-stack>
       ) : (
         <AiDescriptionSection
           productId={product.id}
+          productTitle={product.title}
+          statusBadges={statusBadges}
           configured={ai.configured}
           models={ai.models}
           maxImages={ai.maxImages}
@@ -323,8 +314,10 @@ export default function ProductDetail() {
           canWrite={ai.canWrite}
           canPublish={ai.canPublish}
           productStatus={product.status}
-          asideTop={badgeEditor}
-          asideBottom={details}
+          badgeEditor={badgeEditor}
+          badgeHint={enrichment ? enrichment.badgeText : "none"}
+          productDetails={details}
+          onNotice={show}
         />
       )}
     </s-page>

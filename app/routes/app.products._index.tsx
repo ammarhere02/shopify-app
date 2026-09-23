@@ -15,6 +15,7 @@ import { GenerationError, createGenerationDeps } from "../services/description-g
 import { BATCH_MAX } from "../lib/generation-limits";
 import { startBatchGeneration } from "../services/generation-batch.server";
 import type { BatchResult } from "../services/generation-batch.server";
+import { Notice, useNotice } from "../components/Notice";
 
 export type BatchActionResult =
   | { ok: true; message: string; result: BatchResult }
@@ -116,12 +117,14 @@ export default function Products() {
   const [batchContext, setBatchContext] = useState("");
   const [batchModel, setBatchModel] = useState(aiModels[0] ?? "");
   const batchKey = useRef(crypto.randomUUID());
+  const { notice, show, clear } = useNotice();
   useEffect(() => {
-    if (batch.state !== "idle" || !batch.data?.ok) return;
+    if (batch.state !== "idle" || !batch.data) return;
+    show(batch.data.ok ? "success" : "critical", batch.data.message);
+    if (!batch.data.ok) return;
     batchKey.current = crypto.randomUUID();
     setSelected([]);
-    shopify.toast.show(batch.data.message);
-  }, [batch.state, batch.data]);
+  }, [batch.state, batch.data, show]);
   const toggle = (id: number, on: boolean) =>
     setSelected((ids) => (on ? [...ids.filter((i) => i !== id), id].slice(-BATCH_MAX) : ids.filter((i) => i !== id)));
   const queueBatch = () => {
@@ -150,13 +153,8 @@ export default function Products() {
       <s-link slot="secondary-actions" href="/app/sync">
         Sync
       </s-link>
-      <s-query-container>
 
-      {batch.data && !batch.data.ok && (
-        <s-banner tone="critical" heading="Could not queue descriptions">
-          {batch.data.message}
-        </s-banner>
-      )}
+      <Notice notice={notice} onDismiss={clear} />
       {skipped.length > 0 && (
         <s-banner tone="warning" heading={`${skipped.length} product${skipped.length === 1 ? "" : "s"} skipped`}>
           <s-unordered-list>
@@ -177,7 +175,7 @@ export default function Products() {
               search();
             }}
           >
-            <s-grid gridTemplateColumns="@container (inline-size > 640px) 2fr 1fr 1fr auto, 1fr" gap="base" alignItems="end">
+            <s-grid gridTemplateColumns="repeat(auto-fit, minmax(160px, 1fr))" gap="base" alignItems="end">
               <s-search-field
                 label="Search"
                 labelAccessibilityVisibility="exclusive"
@@ -280,7 +278,7 @@ export default function Products() {
               Select up to {BATCH_MAX} active or draft products above. One draft is written per product from its first
               images; review each draft on the product page. Nothing is sent to Shopify.
             </s-paragraph>
-            <s-grid gridTemplateColumns={aiModels.length > 1 ? "@container (inline-size > 640px) 2fr 1fr, 1fr" : "1fr"} gap="base">
+            <s-grid gridTemplateColumns="repeat(auto-fit, minmax(260px, 1fr))" gap="base">
               <s-text-area
                 label="Facts for the writer (optional, applied to every product)"
                 value={batchContext}
@@ -315,7 +313,6 @@ export default function Products() {
           </s-stack>
         </s-section>
       )}
-      </s-query-container>
     </s-page>
   );
 }

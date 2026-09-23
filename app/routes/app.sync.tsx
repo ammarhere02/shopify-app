@@ -17,6 +17,7 @@ import {
   SYNC_BUDGET_MS,
 } from "../services/sync.server";
 import db from "../db.server";
+import { Notice, useNotice } from "../components/Notice";
 
 const RUN_TONE = { SUCCEEDED: "success", FAILED: "critical", RUNNING: "info" } as const;
 
@@ -96,10 +97,11 @@ export default function Sync() {
   const submit = (intent: "sync" | "reconcile") =>
     fetcher.submit({ intent }, { method: "post" });
 
-  // Success is a short toast; a failure stays on screen as a banner.
+  // Result banner at the top: success fades out after a few seconds, a failure stays until closed.
+  const { notice, show, clear } = useNotice();
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data?.ok) shopify.toast.show(fetcher.data.message);
-  }, [fetcher.state, fetcher.data]);
+    if (fetcher.state === "idle" && fetcher.data) show(fetcher.data.ok ? "success" : "critical", fetcher.data.message);
+  }, [fetcher.state, fetcher.data, show]);
 
   return (
     <s-page heading="Sync">
@@ -116,11 +118,7 @@ export default function Sync() {
         Reconcile
       </s-button>
 
-      {fetcher.data && !fetcher.data.ok && (
-        <s-banner tone="critical" heading="Sync failed">
-          {fetcher.data.message}
-        </s-banner>
-      )}
+      <Notice notice={notice} onDismiss={clear} />
 
       <s-section heading="Catalogue">
         <s-paragraph>
