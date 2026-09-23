@@ -113,10 +113,11 @@ const TAB_CSS = `
 .eh-col{display:grid;gap:16px;min-width:0}
 .eh-work{container-type:inline-size;container-name:eh-work;min-width:0;display:grid;gap:16px;align-content:start}
 @container eh-page (min-width: 760px){
-  /* Both columns take the height of the taller one, so no empty corner: the Description panel
-     absorbs the difference and its body scrolls when the text is longer than the panel. */
+  /* The row is as tall as the taller column. The right column stretches to it and the Description
+     panel absorbs the difference (its body scrolls), so there is no empty corner under History.
+     The left card keeps its natural height, so it never shows blank space inside it either. */
   .eh-cols{grid-template-columns:300px minmax(0,1fr);align-items:stretch}
-  .eh-col{grid-template-rows:1fr}
+  .eh-col{align-self:start}
   .eh-work{grid-template-rows:minmax(0,1fr) auto auto;align-content:stretch;height:100%}
   .eh-panel--desc{min-height:0}
   .eh-panel--desc .eh-panel__body{max-height:none}
@@ -125,6 +126,8 @@ const TAB_CSS = `
 .eh-panel--desc .eh-panel__body{max-height:560px;min-height:220px}
 .eh-panel--hist .eh-panel__body{max-height:240px}
 .eh-panel--info .eh-panel__body{max-height:280px}
+/* Everything under the hero image scrolls as one unit, so the product card stays a fixed height. */
+.eh-panel__scroll{max-height:560px;overflow:auto;overscroll-behavior:contain}
 .eh-info{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
 @container eh-work (min-width: 640px){.eh-info{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 .eh-info__title{font-size:13px;font-weight:600;color:rgba(0,0,0,.9);display:block;margin-bottom:8px}
@@ -142,7 +145,7 @@ const TAB_CSS = `
 .eh-acc__chev{width:16px;height:16px;flex:none;transition:transform .2s ease;opacity:.6}
 .eh-acc[data-open="true"] .eh-acc__chev{transform:rotate(180deg)}
 .eh-acc__hint{font-weight:400;color:rgba(0,0,0,.55);font-size:12px;margin-left:auto}
-.eh-acc__body{padding:0 16px 16px;max-height:360px;overflow:auto}
+.eh-acc__body{padding:0 16px 16px}
 
 /* Gallery: selected images feed the writer */
 .eh-hero{position:relative;aspect-ratio:4/3;background:#f6f6f7;overflow:hidden}
@@ -533,83 +536,85 @@ export function AiDescriptionSection(props: Props) {
                   })}
                 </div>
               )}
-              <div className="eh-meta">
-                <s-stack direction="inline" gap="small" alignItems="center">
-                  {props.statusBadges}
-                </s-stack>
-                <s-text color="subdued">
-                  {images.length === 0
-                    ? "No images selected."
-                    : `${selected.length} of ${maxImages} images go to the writer.`}
-                </s-text>
-                {errors.mediaIds && (
-                  <s-text tone="critical">{errors.mediaIds}</s-text>
-                )}
-                {props.imagesError && (
-                  <s-text tone="warning">{props.imagesError}</s-text>
-                )}
-              </div>
-
-              <Collapse
-                title="Generate"
-                hint={configured ? undefined : "not configured"}
-                defaultOpen
-              >
-                <s-stack gap="small">
-                  {!configured && (
-                    <s-banner tone="warning">
-                      Set OPENROUTER_API_KEY and OPENROUTER_MODELS on the
-                      server.
-                    </s-banner>
-                  )}
-                  <s-text-area
-                    label="Facts for the writer (optional)"
-                    details="Audience, tone, material, benefits, keywords."
-                    value={context}
-                    rows={2}
-                    maxLength={CONTEXT_MAX}
-                    disabled={busy || running}
-                    error={errors.merchantContext}
-                    onInput={(e) => setContext(e.currentTarget.value)}
-                  />
-                  {models.length > 1 && (
-                    <s-select
-                      label="Model"
-                      value={model}
-                      disabled={busy || running}
-                      error={errors.model}
-                      onChange={(e) => setModel(e.currentTarget.value)}
-                    >
-                      {models.map((m) => (
-                        <s-option key={m} value={m}>
-                          {m}
-                        </s-option>
-                      ))}
-                    </s-select>
-                  )}
-                  <s-button
-                    variant={job ? "secondary" : "primary"}
-                    disabled={!canGenerate}
-                    loading={pending === "generate"}
-                    onClick={() => generate("generate")}
-                  >
-                    {job ? "Generate new draft" : "Generate description"}
-                  </s-button>
+              <div className="eh-panel__scroll">
+                <div className="eh-meta">
+                  <s-stack direction="inline" gap="small" alignItems="center">
+                    {props.statusBadges}
+                  </s-stack>
                   <s-text color="subdued">
-                    Never changes your Shopify product until you apply.
+                    {images.length === 0
+                      ? "No images selected."
+                      : `${selected.length} of ${maxImages} images go to the writer.`}
                   </s-text>
-                </s-stack>
-              </Collapse>
+                  {errors.mediaIds && (
+                    <s-text tone="critical">{errors.mediaIds}</s-text>
+                  )}
+                  {props.imagesError && (
+                    <s-text tone="warning">{props.imagesError}</s-text>
+                  )}
+                </div>
 
-              {props.badgeEditor && (
                 <Collapse
-                  title="Storefront badge"
-                  hint={props.badgeHint}
+                  title="Generate"
+                  hint={configured ? undefined : "not configured"}
                   defaultOpen
                 >
-                  {props.badgeEditor}
+                  <s-stack gap="small">
+                    {!configured && (
+                      <s-banner tone="warning">
+                        Set OPENROUTER_API_KEY and OPENROUTER_MODELS on the
+                        server.
+                      </s-banner>
+                    )}
+                    <s-text-area
+                      label="Facts for the writer (optional)"
+                      details="Audience, tone, material, benefits, keywords."
+                      value={context}
+                      rows={2}
+                      maxLength={CONTEXT_MAX}
+                      disabled={busy || running}
+                      error={errors.merchantContext}
+                      onInput={(e) => setContext(e.currentTarget.value)}
+                    />
+                    {models.length > 1 && (
+                      <s-select
+                        label="Model"
+                        value={model}
+                        disabled={busy || running}
+                        error={errors.model}
+                        onChange={(e) => setModel(e.currentTarget.value)}
+                      >
+                        {models.map((m) => (
+                          <s-option key={m} value={m}>
+                            {m}
+                          </s-option>
+                        ))}
+                      </s-select>
+                    )}
+                    <s-button
+                      variant={job ? "secondary" : "primary"}
+                      disabled={!canGenerate}
+                      loading={pending === "generate"}
+                      onClick={() => generate("generate")}
+                    >
+                      {job ? "Generate new draft" : "Generate description"}
+                    </s-button>
+                    <s-text color="subdued">
+                      Never changes your Shopify product until you apply.
+                    </s-text>
+                  </s-stack>
                 </Collapse>
-              )}
+
+                {props.badgeEditor && (
+                  <Collapse
+                    title="Storefront badge"
+                    hint={props.badgeHint}
+                    defaultOpen
+                  >
+                    {props.badgeEditor}
+                  </Collapse>
+                )}
+              </div>
             </div>
           </div>
 
