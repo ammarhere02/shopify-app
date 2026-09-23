@@ -69,7 +69,7 @@ MySQL 8 runs as the container `enrichment-hub-mysql`. A new volume is initialize
 
 ## Usage
 
-1. **Synchronize.** On the app home page, *Sync now* imports the catalog using cursor pagination. Repeated runs update rows in place and do not modify enrichments. *Reconcile* performs the same full read to repair missed webhooks.
+1. **Synchronize.** On the Sync page (nav entry *Sync*; the product catalogue is the home screen), *Sync now* imports the catalog using cursor pagination. Repeated runs update rows in place and do not modify enrichments. *Reconcile* performs the same full read to repair missed webhooks.
 2. **Enrich.** *Products* lists the local catalog with search and filters. A product's editor sets badge text (maximum 40 characters), badge colour (`#RRGGBB`), the active flag and an internal note.
 3. **Activate the theme block.** Online Store → Themes → Customize → product template → Add block → Apps → **Product Badge** → Save. Settings: visibility, alignment, style, text size, corner radius. On themes whose product card accepts app blocks (for example Horizon), **Product Card Badge** can be added inside the Product card block to show badges in product grids.
 4. **Webhooks.** `products/create`, `products/update`, `products/delete`, `app/uninstalled` and `app/scopes_update` are declared in `shopify.app.toml` and registered by `npm run dev` (or `shopify app deploy` for a deployed app).

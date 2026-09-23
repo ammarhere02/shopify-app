@@ -1,4 +1,13 @@
 /**
+ * Purpose: Reads and validates the OpenRouter settings and limits for the AI feature.
+ * Called by: createGenerationDeps, the worker, and pages that need the allowed model names.
+ * Input: Environment variables (key, model allowlist, timeouts, limits).
+ * Output: A typed AiConfig, or AiConfigError naming the missing or invalid variable.
+ * Uses: process.env only.
+ * Does not: Make network calls or expose the key value anywhere, including error messages.
+ */
+
+/**
  * Server-side OpenRouter configuration, read from the environment.
  * Parsed lazily (not at import) so the app still boots without a key; only the
  * generation feature reports "not configured".

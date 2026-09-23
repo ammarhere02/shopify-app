@@ -74,3 +74,22 @@ export function serializeGeneration(job: JobRow) {
 export type GenerationView = ReturnType<typeof serializeGeneration>;
 
 export const isGenerationFinished = (status: string) => status === "SUCCEEDED" || status === "FAILED";
+
+/** Badge text and tone for a product's latest job (catalogue column). Queued/Running/Failed describe generation; after success the review status is what matters. */
+export function aiStatusLabel(job: { status: string; reviewStatus: string | null } | null | undefined) {
+  if (!job) return { label: "Not generated", tone: "neutral" as const };
+  const pretty = (s: string) => s.charAt(0) + s.slice(1).toLowerCase();
+  if (job.status === "FAILED") return { label: "Failed", tone: "critical" as const };
+  if (job.status !== "SUCCEEDED") return { label: pretty(job.status), tone: "info" as const };
+  switch (job.reviewStatus) {
+    case "APPROVED":
+    case "APPLIED":
+      return { label: pretty(job.reviewStatus), tone: "success" as const };
+    case "REJECTED":
+      return { label: "Rejected", tone: "neutral" as const };
+    case "APPLYING":
+      return { label: "Applying", tone: "info" as const };
+    default:
+      return { label: "Draft", tone: "caution" as const };
+  }
+}

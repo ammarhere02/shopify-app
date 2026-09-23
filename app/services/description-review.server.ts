@@ -1,3 +1,11 @@
+/**
+ * Purpose: The merchant's decisions on a finished draft: edit, approve, reject, reopen, regenerate.
+ * Called by: The admin generation route and the /api/v1 regenerate route.
+ * Input: Shop, job id, edited HTML or a review decision.
+ * Output: The updated job row (draft text or review status).
+ * Uses: ai-generation repository; startGeneration for a regenerate.
+ * Does not: Call Shopify or OpenRouter; approval never writes to the store.
+ */
 import {
   getJob,
   moveReviewStatus,

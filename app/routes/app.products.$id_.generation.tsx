@@ -1,3 +1,11 @@
+/**
+ * Purpose: Server endpoint behind the AI description panel: starts, reviews, applies, restores, publishes.
+ * Called by: The browser (fetcher) from AiDescriptionSection, after authenticate.admin.
+ * Input: Form intent plus job id, draft HTML, media ids, version id or publication id.
+ * Output: JSON { ok, message, job, versions } for the panel, or a polling read of one job.
+ * Uses: Generation, review, apply and publication services; the admin rate limiter.
+ * Does not: Contain business rules; every check lives in the services it calls.
+ */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { AiConfigError } from "../ai/config.server";
 import { logger } from "../lib/logger.server";

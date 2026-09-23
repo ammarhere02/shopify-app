@@ -1,3 +1,11 @@
+/**
+ * Purpose: The only code that talks to OpenRouter (chat completion with images and a JSON schema).
+ * Called by: runGeneration, through the OpenRouterClient interface.
+ * Input: Model, messages (text first, then image URLs), JSON schema, token limit.
+ * Output: The raw answer text plus usage, cost, latency and generation id; or AiProviderError.
+ * Uses: fetch to the OpenRouter API, with timeout and bounded retries.
+ * Does not: Validate or sanitize the answer, or log the prompt, images, answer or key.
+ */
 import { logger } from "../lib/logger.server";
 import type { AiConfig } from "./config.server";
 

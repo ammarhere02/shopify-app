@@ -1,3 +1,11 @@
+/**
+ * Purpose: Runs queued generation jobs (batches, or jobs whose inline run died) in the background.
+ * Called by: entry.server.tsx once at boot; the loop then runs on a timer.
+ * Input: QUEUED rows in ai_generation_jobs.
+ * Output: Each leased job ends SUCCEEDED with a draft or FAILED with a reason.
+ * Uses: ai-generation repository (lease), OpenRouter client via runGeneration.
+ * Does not: Create jobs, call Shopify, or run more than one job per shop at a time.
+ */
 import { AiConfigError, loadAiConfig } from "../ai/config.server";
 import { createOpenRouterClient } from "../ai/openrouter-client.server";
 import { logger } from "../lib/logger.server";

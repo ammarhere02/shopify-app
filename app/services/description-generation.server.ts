@@ -1,3 +1,11 @@
+/**
+ * Purpose: Creates and runs one AI description generation job.
+ * Called by: The admin generation route and the /api/v1 generation routes (start); the worker (run).
+ * Input: Shop, product, selected media ids, merchant context, model, idempotency key.
+ * Output: A QUEUED job row (plus a run function for inline use) that ends SUCCEEDED with a draft or FAILED.
+ * Uses: Shopify client (product + images), OpenRouter client, ai-generation repository.
+ * Does not: Write anything to Shopify or decide what the merchant approves.
+ */
 import type { AiGenerationJob } from "@prisma/client";
 import db from "../db.server";
 import { logger } from "../lib/logger.server";

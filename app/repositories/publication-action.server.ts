@@ -1,3 +1,11 @@
+/**
+ * Purpose: Database access for the publish audit trail.
+ * Called by: The publication service, and the API publish route for history.
+ * Input: Shop id, product id, publication id, the Shopify result.
+ * Output: publication_actions rows.
+ * Uses: Prisma (MySQL) only.
+ * Does not: Call Shopify or decide whether a publish is allowed.
+ */
 import type { Prisma } from "@prisma/client";
 import db from "../db.server";
 

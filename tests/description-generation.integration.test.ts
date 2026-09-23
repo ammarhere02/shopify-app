@@ -143,7 +143,7 @@ describe("a successful generation", () => {
   it("returns a QUEUED job first, then the run stores a sanitized draft, warnings and usage", async () => {
     const started = await startGeneration(deps, shop.id, input());
     expect(started.created).toBe(true);
-    expect(started.job).toMatchObject({ status: "QUEUED", model: "vendor/vision:free", provider: "openrouter", promptVersion: "v2" });
+    expect(started.job).toMatchObject({ status: "QUEUED", model: "vendor/vision:free", provider: "openrouter", promptVersion: "v3" });
     expect(started.job.inputHash).toMatch(/^[0-9a-f]{64}$/);
     expect(generate).not.toHaveBeenCalled();
 

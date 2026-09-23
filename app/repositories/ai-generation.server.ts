@@ -1,3 +1,11 @@
+/**
+ * Purpose: All database access for generation jobs, their inputs and outputs.
+ * Called by: The generation, review, apply and worker services; never by routes.
+ * Input: Shop id plus job data or a state change; every query is scoped by shop.
+ * Output: Job rows, or true/false for conditional state moves.
+ * Uses: Prisma (MySQL) only.
+ * Does not: Decide business rules; it only enforces the state table from generation-state.ts.
+ */
 import { Prisma } from "@prisma/client";
 import db from "../db.server";
 import { APPLY_ABANDON_MS, JOB_ABANDON_MS, canMoveReview } from "../services/generation-state";
@@ -113,6 +121,24 @@ export function listJobsForProduct(shopId: number, productId: number, limit = 20
     take: limit,
     include: { output: { select: { warningsJson: true, cost: true, latencyMs: true } } },
   });
+}
+
+/**
+ * Latest job per product for a catalogue page, in ONE query (no per-row lookups).
+ * Rows come newest first, so the first row seen for a product is its latest job.
+ */
+export async function latestJobStatusByProduct(shopId: number, productIds: number[]) {
+  const latest = new Map<number, { status: string; reviewStatus: string | null }>();
+  if (productIds.length === 0) return latest;
+  const rows = await db.aiGenerationJob.findMany({
+    where: { shopId, productId: { in: productIds } },
+    orderBy: { id: "desc" },
+    select: { productId: true, status: true, reviewStatus: true },
+  });
+  for (const row of rows) {
+    if (!latest.has(row.productId)) latest.set(row.productId, { status: row.status, reviewStatus: row.reviewStatus });
+  }
+  return latest;
 }
 
 /** Spend limits are counted from rows, not memory, so they survive restarts. */

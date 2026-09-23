@@ -1,3 +1,11 @@
+/**
+ * Purpose: Lists sales channels and publishes a product to one of them.
+ * Called by: The admin generation route (publish) and the /api/v1 publish route.
+ * Input: Shop with granted scopes, product id, publication id, the acting identity.
+ * Output: A publication_actions audit row (REQUESTED, then SUCCEEDED or FAILED).
+ * Uses: Shopify client (publications query, publishablePublish), publication-action repository.
+ * Does not: Change the product description or its status; a DRAFT product is refused.
+ */
 import db from "../db.server";
 import { logger } from "../lib/logger.server";
 import {

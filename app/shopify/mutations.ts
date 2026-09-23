@@ -1,3 +1,11 @@
+/**
+ * Purpose: Every Admin GraphQL write the app makes, plus the userErrors helper.
+ * Called by: The apply service (productUpdate) and the publication service (publications, publishablePublish).
+ * Input: Product id and description HTML, or product id and publication ids.
+ * Output: Mutation documents and typed payloads; requireNoUserErrors throws ShopifyUserErrors.
+ * Uses: Nothing; plain strings validated against the 2026-07 schema.
+ * Does not: Retry or execute anything; the client and services do that.
+ */
 // The only writes this app makes to Shopify. Both validated against 2026-07 with the Shopify
 // AI Toolkit. A mutation can fail three ways: transport/GraphQL errors (thrown by the client as
 // ShopifyApiError) and `userErrors` inside a 200 response, which the caller must read itself.

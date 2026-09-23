@@ -1,3 +1,11 @@
+/**
+ * Purpose: Database access for the history of descriptions this app wrote to Shopify.
+ * Called by: The apply service (create) and the product page and API routes (list, get).
+ * Input: Shop id, product id, the text before and after a write, the acting identity.
+ * Output: Version rows, newest first.
+ * Uses: Prisma (MySQL) only.
+ * Does not: Call Shopify; the write itself happens in the apply service.
+ */
 import type { Prisma } from "@prisma/client";
 import db from "../db.server";
 

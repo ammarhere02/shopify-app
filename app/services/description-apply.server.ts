@@ -1,3 +1,11 @@
+/**
+ * Purpose: Writes an approved draft (or an older version) to the Shopify product description.
+ * Called by: The admin generation route (apply, restore) and the /api/v1 apply and restore routes.
+ * Input: Shop with granted scopes, job id or version id, the acting identity.
+ * Output: A new product_description_versions row; the job becomes APPLIED.
+ * Uses: Shopify client (read + productUpdate), ai-generation and description-version repositories.
+ * Does not: Publish the product or overwrite a description that changed since generation.
+ */
 import db from "../db.server";
 import { logger } from "../lib/logger.server";
 import { getJob, moveReviewStatus, recoverAbandonedApplies } from "../repositories/ai-generation.server";

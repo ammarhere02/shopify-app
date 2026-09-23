@@ -1,4 +1,12 @@
 /**
+ * Purpose: Every Admin GraphQL read the app makes (shop, product pages, variants, product + media).
+ * Called by: The sync, webhook and generation services through the Shopify client.
+ * Input: Variables such as cursors and product ids.
+ * Output: Query documents; the data shape is typed where the query is used.
+ * Uses: Nothing; plain strings validated against the 2026-07 schema.
+ * Does not: Contain mutations (see mutations.ts) or execute anything itself.
+ */
+/**
  * Admin GraphQL documents. Fields are listed explicitly (no over-fetching).
  * The `#graphql` tag lets Shopify codegen/editor tooling validate them against the schema.
  */

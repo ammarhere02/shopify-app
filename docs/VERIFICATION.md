@@ -66,8 +66,13 @@ Known limits: the sync runs inside the request (60s budget, no queue); a crashed
 - [x] Labelled, keyboard-usable Polaris controls
 - [x] Unit tests (validation) and real-MySQL tests (one per product, tenant isolation, filters, pagination)
 - [ ] Manual check in the dev store admin
+- [x] Catalogue is the home screen (`/app` redirects to `/app/products`); sync tools moved to `/app/sync` with their own nav entry
+- [x] Catalogue shows each product's latest AI generation state from one query; filters in one responsive row; table rows collapse to a list on narrow screens; Polaris table pagination
+- [x] Product page: badges under the title, AI workflow in the main column, badge editor and variants in the aside; per-action loading, toasts on success, banners on errors
+- [x] AI panel split into numbered steps; edits survive Save draft / Approve answers; preview updates on every keystroke without a request; versions and history as tables
+- [ ] Visual check of desktop and narrow layouts in the dev store admin
 
-Decisions: list and detail routes; keyset pagination on the local id; "remove" deletes the row while `active = false` hides it; soft-deleted products are hidden from the list.
+Decisions: list and detail routes; keyset pagination on the local id; prompt `v3` (category-aware structure, concrete opening sentence, banned filler, specifications only when a source supports them, 60-160 words); "remove" deletes the row while `active = false` hides it; soft-deleted products are hidden from the list.
 
 ## Webhooks and receipts
 

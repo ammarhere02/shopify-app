@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -138,10 +138,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   return { ok: true, message: "Badge saved.", errors: {} };
 };
 
+const STATUS_TONE = { ACTIVE: "success", DRAFT: "info", ARCHIVED: "neutral" } as const;
+
 export default function ProductDetail() {
   const { product, enrichment, ai } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const busy = fetcher.state !== "idle";
+  const pending = fetcher.formData?.get("intent");
   const errors: Record<string, string> = fetcher.data?.errors ?? {};
 
   const [badgeText, setBadgeText] = useState(enrichment?.badgeText ?? "");
@@ -152,6 +155,11 @@ export default function ProductDetail() {
     enrichment?.internalNote ?? "",
   );
   const [active, setActive] = useState(enrichment?.active ?? true);
+
+  // Success is a toast; validation errors stay next to the fields.
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.ok) shopify.toast.show(fetcher.data.message);
+  }, [fetcher.state, fetcher.data]);
 
   const save = () =>
     fetcher.submit(
@@ -166,10 +174,23 @@ export default function ProductDetail() {
     );
 
   return (
-    <s-page heading={product.title}>
+    <s-page heading={product.title} inlineSize="large">
       <s-link slot="breadcrumb-actions" href="/app/products">
         Products
       </s-link>
+
+      <s-stack direction="inline" gap="small" alignItems="center">
+        <s-badge tone={STATUS_TONE[product.status as keyof typeof STATUS_TONE] ?? "neutral"}>
+          {product.status.charAt(0) + product.status.slice(1).toLowerCase()}
+        </s-badge>
+        {product.deleted && <s-badge tone="warning">Deleted in Shopify</s-badge>}
+        {enrichment && (
+          <s-badge tone={enrichment.active ? "success" : "neutral"}>
+            {enrichment.active ? "Badge live" : "Badge inactive"}
+          </s-badge>
+        )}
+        <s-text color="subdued">{product.shopifyProductGid.replace("gid://shopify/Product/", "Shopify ID ")}</s-text>
+      </s-stack>
 
       {product.deleted && (
         <s-banner tone="warning">
@@ -177,67 +198,9 @@ export default function ProductDetail() {
           history but will not show on the storefront.
         </s-banner>
       )}
-      {fetcher.data && (
-        <s-banner tone={fetcher.data.ok ? "success" : "critical"}>
-          {fetcher.data.message}
-        </s-banner>
+      {fetcher.data && !fetcher.data.ok && (
+        <s-banner tone="critical">{fetcher.data.message}</s-banner>
       )}
-
-      <s-section heading="Badge and note">
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            save();
-          }}
-        >
-          <s-stack gap="base">
-            <s-text-field
-              label="Badge text"
-              details="Shown publicly on the product page."
-              value={badgeText}
-              maxLength={BADGE_TEXT_MAX}
-              required
-              error={errors.badgeText}
-              onInput={(e) => setBadgeText(e.currentTarget.value)}
-            />
-            <s-color-field
-              label="Badge color"
-              value={badgeColor}
-              error={errors.badgeColor}
-              onChange={(e) => setBadgeColor(e.currentTarget.value)}
-            />
-            <s-checkbox
-              label="Active (show on storefront)"
-              checked={active}
-              onChange={(e) => setActive(e.currentTarget.checked)}
-            />
-            <s-text-area
-              label="Internal note"
-              details="Private. Never sent to the storefront."
-              value={internalNote}
-              rows={4}
-              error={errors.internalNote}
-              onInput={(e) => setInternalNote(e.currentTarget.value)}
-            />
-            <s-stack direction="inline" gap="base">
-              <s-button variant="primary" type="submit" loading={busy}>
-                Save
-              </s-button>
-              {enrichment && (
-                <s-button
-                  tone="critical"
-                  disabled={busy}
-                  onClick={() =>
-                    fetcher.submit({ intent: "remove" }, { method: "post" })
-                  }
-                >
-                  Remove badge
-                </s-button>
-              )}
-            </s-stack>
-          </s-stack>
-        </form>
-      </s-section>
 
       {!product.deleted && (
         <AiDescriptionSection
@@ -256,16 +219,90 @@ export default function ProductDetail() {
         />
       )}
 
-      <s-section heading="Shopify data (read-only)">
-        <s-paragraph>Status: {product.status}</s-paragraph>
-        <s-paragraph>ID: {product.shopifyProductGid}</s-paragraph>
-        <s-unordered-list>
-          {product.variants.map((v) => (
-            <s-list-item key={v.id}>
-              {v.title} · {v.sku || "no SKU"} · {v.price}
-            </s-list-item>
-          ))}
-        </s-unordered-list>
+      <s-section slot="aside" heading="Storefront badge">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            save();
+          }}
+        >
+          <s-stack gap="base">
+            <s-text-field
+              label="Badge text"
+              details="Shown publicly on the product page."
+              value={badgeText}
+              maxLength={BADGE_TEXT_MAX}
+              required
+              disabled={busy}
+              error={errors.badgeText}
+              onInput={(e) => setBadgeText(e.currentTarget.value)}
+            />
+            <s-color-field
+              label="Badge color"
+              value={badgeColor}
+              disabled={busy}
+              error={errors.badgeColor}
+              onChange={(e) => setBadgeColor(e.currentTarget.value)}
+            />
+            <s-checkbox
+              label="Active (show on storefront)"
+              checked={active}
+              disabled={busy}
+              onChange={(e) => setActive(e.currentTarget.checked)}
+            />
+            <s-text-area
+              label="Internal note"
+              details="Private. Never sent to the storefront."
+              value={internalNote}
+              rows={3}
+              disabled={busy}
+              error={errors.internalNote}
+              onInput={(e) => setInternalNote(e.currentTarget.value)}
+            />
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <s-button variant="primary" type="submit" loading={pending === "save"} disabled={busy}>
+                {enrichment ? "Save badge" : "Add badge"}
+              </s-button>
+              {enrichment && (
+                <s-button
+                  tone="critical"
+                  variant="tertiary"
+                  loading={pending === "remove"}
+                  disabled={busy}
+                  onClick={() =>
+                    fetcher.submit({ intent: "remove" }, { method: "post" })
+                  }
+                >
+                  Remove badge
+                </s-button>
+              )}
+            </s-stack>
+          </s-stack>
+        </form>
+      </s-section>
+
+      <s-section slot="aside" heading="Variants">
+        {product.variants.length === 0 ? (
+          <s-text color="subdued">No variants synced.</s-text>
+        ) : (
+          <s-table>
+            <s-table-header-row>
+              <s-table-header listSlot="primary">Variant</s-table-header>
+              <s-table-header listSlot="secondary">SKU</s-table-header>
+              <s-table-header listSlot="inline" format="numeric">Price</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {product.variants.map((v) => (
+                <s-table-row key={v.id}>
+                  <s-table-cell>{v.title}</s-table-cell>
+                  <s-table-cell>{v.sku || "—"}</s-table-cell>
+                  <s-table-cell>{v.price}</s-table-cell>
+                </s-table-row>
+              ))}
+            </s-table-body>
+          </s-table>
+        )}
+        <s-text color="subdued">Read-only copy from the last sync.</s-text>
       </s-section>
     </s-page>
   );
