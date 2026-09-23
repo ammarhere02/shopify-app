@@ -97,19 +97,16 @@ const TAB_CSS = `
 .eh-live[data-live="true"] i{background:#005bd3;animation:eh-blink .9s ease-in-out infinite}
 @keyframes eh-blink{50%{opacity:.25}}
 
-/* Workspace: fills the app viewport on wide screens, each panel scrolls on its own; plain flow below 760px. */
+/* Workspace: two columns from 760px, one below. The admin iframe grows with its content, so no
+   viewport-height tricks: long bodies get a fixed max height and scroll inside their panel instead. */
 .eh-layout{container-type:inline-size;container-name:eh-page}
 .eh-cols{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}
 .eh-col{display:grid;gap:16px;min-width:0}
-.eh-work{container-type:inline-size;container-name:eh-work;min-width:0;display:grid;gap:16px}
-@container eh-page (min-width: 760px){
-  .eh-cols{grid-template-columns:300px minmax(0,1fr);height:calc(100dvh - 150px);min-height:560px}
-  .eh-col{height:100%;overflow:auto;align-content:start;padding-right:2px}
-  .eh-work{height:100%;grid-template-rows:minmax(0,1fr) auto;min-height:0}
-  .eh-panel--desc{min-height:0}
-  .eh-panel--hist{max-height:38%}
-}
-.eh-panel{background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.04);display:flex;flex-direction:column;min-height:0}
+.eh-work{container-type:inline-size;container-name:eh-work;min-width:0;display:grid;gap:16px;align-content:start}
+@container eh-page (min-width: 760px){.eh-cols{grid-template-columns:300px minmax(0,1fr)}}
+.eh-panel{background:#fff;border:1px solid rgba(0,0,0,.08);border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.04);display:flex;flex-direction:column;overflow:hidden}
+.eh-panel--desc .eh-panel__body{max-height:560px;min-height:220px}
+.eh-panel--hist .eh-panel__body{max-height:260px}
 .eh-panel__head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid rgba(0,0,0,.08);flex:none;flex-wrap:wrap}
 .eh-panel__title{font-size:13px;font-weight:600;color:rgba(0,0,0,.9)}
 .eh-panel__body{padding:16px;overflow:auto;min-height:0;flex:1 1 auto}
@@ -127,7 +124,7 @@ const TAB_CSS = `
 .eh-acc__body{padding:0 16px 16px}
 
 /* Gallery: selected images feed the writer */
-.eh-hero{position:relative;aspect-ratio:1/1;background:#f6f6f7;border-radius:12px 12px 0 0;overflow:hidden}
+.eh-hero{position:relative;aspect-ratio:4/3;background:#f6f6f7;overflow:hidden}
 .eh-hero img{width:100%;height:100%;object-fit:cover;display:block}
 .eh-hero__empty{position:absolute;inset:0;display:grid;place-items:center;color:rgba(0,0,0,.5);font-size:13px;padding:16px;text-align:center}
 .eh-thumbs{display:flex;gap:8px;padding:12px 16px;overflow-x:auto}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useFetcher, useLoaderData, useNavigate, useNavigation } from "react-router";
+import { Link, useFetcher, useLoaderData, useNavigate, useNavigation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { requireActiveShop } from "../services/shop.server";
@@ -106,6 +106,7 @@ export default function Products() {
   const navigate = useNavigate();
   const navigation = useNavigation();
   const loadingList = navigation.state === "loading";
+  const openingId = navigation.state === "loading" ? Number(navigation.location.pathname.split("/").pop()) : null;
   const [query, setQuery] = useState(filters.query);
   const [status, setStatus] = useState(filters.status);
   const [hasBadge, setHasBadge] = useState(filters.hasBadge);
@@ -241,7 +242,10 @@ export default function Products() {
                     </s-table-cell>
                     <s-table-cell>
                       <s-stack gap="none">
-                        <s-link href={`/app/products/${p.id}`}>{p.title}</s-link>
+                        {openingId === p.id && <s-spinner size="base" accessibilityLabel="Opening product" />}
+                        <Link to={`/app/products/${p.id}`} style={{ color: "inherit", fontWeight: 500 }}>
+                          {p.title}
+                        </Link>
                         {p.vendor && <s-text color="subdued">{p.vendor}</s-text>}
                       </s-stack>
                     </s-table-cell>

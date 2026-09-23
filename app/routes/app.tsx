@@ -1,5 +1,6 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Link, Outlet, useLoaderData, useRouteError } from "react-router";
+import { useEffect } from "react";
+import { Link, Outlet, useLoaderData, useNavigation, useRouteError } from "react-router";
 import { NavMenu } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
@@ -15,6 +16,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
+  // Shopify's own loading bar at the top of the admin while a page loader runs (opening a product, filtering).
+  const navigation = useNavigation();
+  useEffect(() => {
+    if (typeof shopify === "undefined" || !shopify.loading) return;
+    shopify.loading(navigation.state !== "idle");
+  }, [navigation.state]);
 
   return (
     <AppProvider embedded apiKey={apiKey}>
