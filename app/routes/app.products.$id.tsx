@@ -211,7 +211,7 @@ export default function ProductDetail() {
             label="Internal note"
             details="Private. Never sent to the storefront."
             value={internalNote}
-            rows={2}
+            rows={1}
             disabled={busy}
             error={errors.internalNote}
             onInput={(e) => setInternalNote(e.currentTarget.value)}
@@ -242,13 +242,12 @@ export default function ProductDetail() {
   const details = (
     <s-section heading="Product details">
       <s-stack gap="small">
-        <s-text color="subdued">Read-only copy from the last sync.</s-text>
         <s-button variant="tertiary" onClick={() => setDetailsOpen((v) => !v)}>
           {detailsOpen ? "Hide details" : `Show details (${product.variants.length} variant${product.variants.length === 1 ? "" : "s"})`}
         </s-button>
         {detailsOpen && (
           <s-stack gap="small">
-            <s-text color="subdued">{product.shopifyProductGid.replace("gid://shopify/Product/", "Shopify ID ")}</s-text>
+            <s-text color="subdued">{product.shopifyProductGid.replace("gid://shopify/Product/", "Shopify ID ")} · read-only copy from the last sync</s-text>
             {product.variants.length === 0 ? (
               <s-text color="subdued">No variants synced.</s-text>
             ) : (
@@ -302,12 +301,14 @@ export default function ProductDetail() {
       )}
 
       {product.deleted ? (
-        <s-grid gridTemplateColumns="@container (inline-size > 900px) 300px minmax(0, 1fr), minmax(0, 1fr)" gap="base" alignItems="start">
-          <s-stack gap="base">
-            {badgeEditor}
-            {details}
-          </s-stack>
-        </s-grid>
+        <s-query-container>
+          <s-grid gridTemplateColumns="@container (inline-size > 760px) 280px minmax(0, 1fr), minmax(0, 1fr)" gap="base" alignItems="start">
+            <s-stack gap="base">
+              {badgeEditor}
+              {details}
+            </s-stack>
+          </s-grid>
+        </s-query-container>
       ) : (
         <AiDescriptionSection
           productId={product.id}

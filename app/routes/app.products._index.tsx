@@ -150,6 +150,7 @@ export default function Products() {
       <s-link slot="secondary-actions" href="/app/sync">
         Sync
       </s-link>
+      <s-query-container>
 
       {batch.data && !batch.data.ok && (
         <s-banner tone="critical" heading="Could not queue descriptions">
@@ -314,6 +315,7 @@ export default function Products() {
           </s-stack>
         </s-section>
       )}
+      </s-query-container>
     </s-page>
   );
 }

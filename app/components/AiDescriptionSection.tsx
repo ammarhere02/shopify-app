@@ -81,6 +81,18 @@ const TAB_CSS = `
 .eh-rich{font-size:14px;line-height:1.5}
 .eh-rich>:first-child{margin-top:0}.eh-rich>:last-child{margin-bottom:0}
 .eh-rich h2,.eh-rich h3,.eh-rich h4{font-size:15px;margin:12px 0 4px}
+.eh-fade{animation:eh-fade .35s ease-out}
+@keyframes eh-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.eh-skeleton{display:grid;gap:10px;padding:4px 0}
+.eh-skeleton span{display:block;height:12px;border-radius:6px;background:linear-gradient(90deg,rgba(0,0,0,.06) 25%,rgba(0,0,0,.12) 50%,rgba(0,0,0,.06) 75%);background-size:200% 100%;animation:eh-shimmer 1.4s linear infinite}
+@keyframes eh-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.eh-preview{border-radius:8px;transition:box-shadow .25s ease}
+.eh-preview[data-live="true"]{box-shadow:0 0 0 2px rgba(0,91,211,.35)}
+.eh-live{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:rgba(0,0,0,.6)}
+.eh-live i{width:7px;height:7px;border-radius:50%;background:rgba(0,0,0,.25)}
+.eh-live[data-live="true"] i{background:#005bd3;animation:eh-blink .9s ease-in-out infinite}
+@keyframes eh-blink{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.eh-fade,.eh-skeleton span,.eh-live i{animation:none}}
 `;
 
 function Tabs<T extends string>(props: { label: string; tabs: { id: T; label: string }[]; value: T; onChange: (id: T) => void }) {
@@ -119,7 +131,7 @@ function Tabs<T extends string>(props: { label: string; tabs: { id: T; label: st
 }
 
 const Panel = (props: { id: string; children: ReactNode }) => (
-  <div role="tabpanel" id={props.id} tabIndex={0}>
+  <div role="tabpanel" id={props.id} tabIndex={0} className="eh-fade">
     {props.children}
   </div>
 );
@@ -145,6 +157,9 @@ export function AiDescriptionSection(props: Props) {
   const [tab, setTab] = useState<"description" | "html" | "seo">("description");
   const [historyTab, setHistoryTab] = useState<"generations" | "versions">("generations");
   const [detailsOpen, setDetailsOpen] = useState(false);
+  // True while the merchant is typing (cleared 700 ms after the last keystroke): drives the preview highlight only.
+  const [typing, setTyping] = useState(false);
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idempotencyKey = useRef(newKey());
   const lastIntent = useRef<Intent | null>(null);
 
@@ -217,6 +232,16 @@ export function AiDescriptionSection(props: Props) {
 
   // Live preview: the same sanitizer the server applies, on every keystroke, no request.
   const preview = useMemo(() => sanitizeHtml(draft), [draft]);
+  const words = useMemo(() => preview.replace(/<[^>]+>/g, " ").trim().split(/\s+/).filter(Boolean).length, [preview]);
+  const onType = (value: string) => {
+    setDraft(value);
+    setTyping(true);
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+    typingTimer.current = setTimeout(() => setTyping(false), 700);
+  };
+  useEffect(() => () => {
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+  }, []);
   const busy = actions.state !== "idle";
   // Only the button that was clicked spins; the others are disabled until the answer arrives.
   const pending = (busy ? actions.formData?.get("intent") : null) as Intent | null;
@@ -260,7 +285,9 @@ export function AiDescriptionSection(props: Props) {
   return (
     <>
       <style>{TAB_CSS}</style>
-      <s-grid gridTemplateColumns="@container (inline-size > 900px) 300px minmax(0, 1fr), minmax(0, 1fr)" gap="base" alignItems="start">
+      {/* Responsive values only resolve inside an s-query-container; without one every grid falls back to a single column. */}
+      <s-query-container>
+      <s-grid gridTemplateColumns="@container (inline-size > 760px) 280px minmax(0, 1fr), minmax(0, 1fr)" gap="base" alignItems="start">
         {/* ---- Left column: inputs and the page's own cards ---- */}
         <s-stack gap="base">
           <s-section heading="Generate">
@@ -304,9 +331,9 @@ export function AiDescriptionSection(props: Props) {
 
               <s-text-area
                 label="Facts for the writer (optional)"
-                details="Audience, tone, material, benefits, keywords."
+                details="Audience, tone, material, benefits, keywords. Generating never changes your Shopify product."
                 value={context}
-                rows={3}
+                rows={2}
                 maxLength={CONTEXT_MAX}
                 disabled={busy || running}
                 error={errors.merchantContext}
@@ -324,7 +351,6 @@ export function AiDescriptionSection(props: Props) {
               <s-button variant={job ? "secondary" : "primary"} disabled={!canGenerate} loading={pending === "generate"} onClick={() => generate("generate")}>
                 {job ? "Generate new" : "Generate description"}
               </s-button>
-              <s-text color="subdued">Generating never changes your Shopify product.</s-text>
             </s-stack>
           </s-section>
 
@@ -332,14 +358,12 @@ export function AiDescriptionSection(props: Props) {
 
           {props.canPublish && (
             <s-section heading="Sales channels">
-              <s-stack gap="small">
-                <s-text color="subdued">Applying a description saves it to Shopify; publishing makes the product visible on a channel. They are separate.</s-text>
-                <s-button disabled={busy} loading={pending === "publish"} commandFor={PUBLISH_MODAL} command="--show" onClick={() => channels.load(`${endpoint}?publications=1`)}>
-                  Publish to a channel…
-                </s-button>
-              </s-stack>
+              <s-button disabled={busy} loading={pending === "publish"} commandFor={PUBLISH_MODAL} command="--show" onClick={() => channels.load(`${endpoint}?publications=1`)}>
+                Publish to a channel…
+              </s-button>
               <s-modal id={PUBLISH_MODAL} heading="Publish this product?">
                 <s-stack gap="base">
+                  <s-text color="subdued">Applying a description saves it to the product. Publishing makes the product visible on a channel. They are separate steps.</s-text>
                   {channels.state !== "idle" && (
                     <s-stack direction="inline" gap="small" alignItems="center">
                       <s-spinner size="base" accessibilityLabel="Loading sales channels" />
@@ -475,7 +499,19 @@ export function AiDescriptionSection(props: Props) {
                     </s-stack>
                   </s-box>
                 )}
-                {running && <s-text color="subdued">Writing the description. This usually takes 5 to 30 seconds; the page updates by itself.</s-text>}
+                {running && (
+                  <s-box padding="base" border="base" borderRadius="base">
+                    <div className="eh-skeleton" aria-busy="true" aria-label="Writing the description">
+                      <span style={{ width: "92%" }} />
+                      <span style={{ width: "100%" }} />
+                      <span style={{ width: "78%" }} />
+                      <span style={{ width: "60%", marginTop: 6 }} />
+                      <span style={{ width: "66%" }} />
+                      <span style={{ width: "54%" }} />
+                    </div>
+                    <s-text color="subdued">Writing the description. Usually 5 to 30 seconds; this page updates by itself.</s-text>
+                  </s-box>
+                )}
 
                 {job?.status === "SUCCEEDED" && (
                   <>
@@ -491,7 +527,7 @@ export function AiDescriptionSection(props: Props) {
                     />
                     {tab === "description" && (
                       <Panel id={`${panelBase}-description-panel`}>
-                        <s-box padding="base" border="base" borderRadius="base">
+                        <s-box padding="large" border="base" borderRadius="base">
                           {/* Safe: `preview` went through the same allowlist sanitizer the server uses. */}
                           <div className="eh-rich" dangerouslySetInnerHTML={{ __html: preview || "<p><em>Empty description.</em></p>" }} />
                         </s-box>
@@ -509,13 +545,21 @@ export function AiDescriptionSection(props: Props) {
                               maxLength={HTML_MAX}
                               readOnly={!isDraft}
                               error={errors.descriptionHtml}
-                              onInput={(e) => setDraft(e.currentTarget.value)}
+                              onInput={(e) => onType(e.currentTarget.value)}
                             />
                             <s-stack gap="small-200">
-                              <s-text type="strong">Preview</s-text>
-                              <s-box padding="base" border="base" borderRadius="base" background="subdued">
-                                <div className="eh-rich" dangerouslySetInnerHTML={{ __html: preview }} />
-                              </s-box>
+                              <s-stack direction="inline" gap="small" alignItems="center" justifyContent="space-between">
+                                <s-text type="strong">Preview</s-text>
+                                <span className="eh-live" data-live={typing} aria-live="polite">
+                                  <i aria-hidden="true" />
+                                  {typing ? "Updating" : `${words} words`}
+                                </span>
+                              </s-stack>
+                              <div className="eh-preview" data-live={typing}>
+                                <s-box padding="base" border="base" borderRadius="base" background="subdued">
+                                  <div className="eh-rich" dangerouslySetInnerHTML={{ __html: preview }} />
+                                </s-box>
+                              </div>
                             </s-stack>
                           </s-grid>
                           {!isDraft && <s-text color="subdued">Read-only in this state. Use Edit again (approved) or Regenerate to change the text.</s-text>}
@@ -743,6 +787,7 @@ export function AiDescriptionSection(props: Props) {
           </s-stack>
         </s-query-container>
       </s-grid>
+      </s-query-container>
     </>
   );
 }
