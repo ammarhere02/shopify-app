@@ -146,6 +146,7 @@ export default function ProductDetail() {
   const busy = fetcher.state !== "idle";
   const pending = fetcher.formData?.get("intent");
   const errors: Record<string, string> = fetcher.data?.errors ?? {};
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   const [badgeText, setBadgeText] = useState(enrichment?.badgeText ?? "");
   const [badgeColor, setBadgeColor] = useState(
@@ -173,13 +174,115 @@ export default function ProductDetail() {
       { method: "post" },
     );
 
+  // Rendered exactly once: inside the AI workspace's left column, or on its own for a deleted product.
+  const badgeEditor = (
+    <s-section heading="Storefront badge">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          save();
+        }}
+      >
+        <s-stack gap="small">
+          {fetcher.data && !fetcher.data.ok && <s-banner tone="critical">{fetcher.data.message}</s-banner>}
+          <s-text-field
+            label="Badge text"
+            value={badgeText}
+            maxLength={BADGE_TEXT_MAX}
+            required
+            disabled={busy}
+            error={errors.badgeText}
+            onInput={(e) => setBadgeText(e.currentTarget.value)}
+          />
+          <s-color-field
+            label="Colour"
+            value={badgeColor}
+            disabled={busy}
+            error={errors.badgeColor}
+            onChange={(e) => setBadgeColor(e.currentTarget.value)}
+          />
+          <s-checkbox
+            label="Show on storefront"
+            checked={active}
+            disabled={busy}
+            onChange={(e) => setActive(e.currentTarget.checked)}
+          />
+          <s-text-area
+            label="Internal note"
+            details="Private. Never sent to the storefront."
+            value={internalNote}
+            rows={2}
+            disabled={busy}
+            error={errors.internalNote}
+            onInput={(e) => setInternalNote(e.currentTarget.value)}
+          />
+          <s-stack direction="inline" gap="small" alignItems="center">
+            <s-button variant="primary" type="submit" loading={pending === "save"} disabled={busy}>
+              {enrichment ? "Save badge" : "Add badge"}
+            </s-button>
+            {enrichment && (
+              <s-button
+                tone="critical"
+                variant="tertiary"
+                loading={pending === "remove"}
+                disabled={busy}
+                onClick={() =>
+                  fetcher.submit({ intent: "remove" }, { method: "post" })
+                }
+              >
+                Remove
+              </s-button>
+            )}
+          </s-stack>
+        </s-stack>
+      </form>
+    </s-section>
+  );
+
+  const details = (
+    <s-section heading="Product details">
+      <s-stack gap="small">
+        <s-text color="subdued">Read-only copy from the last sync.</s-text>
+        <s-button variant="tertiary" onClick={() => setDetailsOpen((v) => !v)}>
+          {detailsOpen ? "Hide details" : `Show details (${product.variants.length} variant${product.variants.length === 1 ? "" : "s"})`}
+        </s-button>
+        {detailsOpen && (
+          <s-stack gap="small">
+            <s-text color="subdued">{product.shopifyProductGid.replace("gid://shopify/Product/", "Shopify ID ")}</s-text>
+            {product.variants.length === 0 ? (
+              <s-text color="subdued">No variants synced.</s-text>
+            ) : (
+              <s-table>
+                <s-table-header-row>
+                  <s-table-header listSlot="primary">Variant</s-table-header>
+                  <s-table-header listSlot="secondary">SKU</s-table-header>
+                  <s-table-header listSlot="inline" format="numeric">Price</s-table-header>
+                </s-table-header-row>
+                <s-table-body>
+                  {product.variants.map((v) => (
+                    <s-table-row key={v.id}>
+                      <s-table-cell>{v.title}</s-table-cell>
+                      <s-table-cell>{v.sku || "—"}</s-table-cell>
+                      <s-table-cell>{v.price}</s-table-cell>
+                    </s-table-row>
+                  ))}
+                </s-table-body>
+              </s-table>
+            )}
+          </s-stack>
+        )}
+      </s-stack>
+    </s-section>
+  );
+
   return (
-    <s-page heading={product.title} inlineSize="large">
+    <s-page heading={product.title}>
       <s-link slot="breadcrumb-actions" href="/app/products">
         Products
       </s-link>
 
       <s-stack direction="inline" gap="small" alignItems="center">
+        {ai.images[0] && <s-thumbnail src={ai.images[0].url} alt={ai.images[0].alt ?? product.title} size="small" />}
         <s-badge tone={STATUS_TONE[product.status as keyof typeof STATUS_TONE] ?? "neutral"}>
           {product.status.charAt(0) + product.status.slice(1).toLowerCase()}
         </s-badge>
@@ -189,7 +292,6 @@ export default function ProductDetail() {
             {enrichment.active ? "Badge live" : "Badge inactive"}
           </s-badge>
         )}
-        <s-text color="subdued">{product.shopifyProductGid.replace("gid://shopify/Product/", "Shopify ID ")}</s-text>
       </s-stack>
 
       {product.deleted && (
@@ -198,11 +300,15 @@ export default function ProductDetail() {
           history but will not show on the storefront.
         </s-banner>
       )}
-      {fetcher.data && !fetcher.data.ok && (
-        <s-banner tone="critical">{fetcher.data.message}</s-banner>
-      )}
 
-      {!product.deleted && (
+      {product.deleted ? (
+        <s-grid gridTemplateColumns="@container (inline-size > 900px) 300px minmax(0, 1fr), minmax(0, 1fr)" gap="base" alignItems="start">
+          <s-stack gap="base">
+            {badgeEditor}
+            {details}
+          </s-stack>
+        </s-grid>
+      ) : (
         <AiDescriptionSection
           productId={product.id}
           configured={ai.configured}
@@ -216,94 +322,10 @@ export default function ProductDetail() {
           canWrite={ai.canWrite}
           canPublish={ai.canPublish}
           productStatus={product.status}
+          asideTop={badgeEditor}
+          asideBottom={details}
         />
       )}
-
-      <s-section slot="aside" heading="Storefront badge">
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            save();
-          }}
-        >
-          <s-stack gap="base">
-            <s-text-field
-              label="Badge text"
-              details="Shown publicly on the product page."
-              value={badgeText}
-              maxLength={BADGE_TEXT_MAX}
-              required
-              disabled={busy}
-              error={errors.badgeText}
-              onInput={(e) => setBadgeText(e.currentTarget.value)}
-            />
-            <s-color-field
-              label="Badge color"
-              value={badgeColor}
-              disabled={busy}
-              error={errors.badgeColor}
-              onChange={(e) => setBadgeColor(e.currentTarget.value)}
-            />
-            <s-checkbox
-              label="Active (show on storefront)"
-              checked={active}
-              disabled={busy}
-              onChange={(e) => setActive(e.currentTarget.checked)}
-            />
-            <s-text-area
-              label="Internal note"
-              details="Private. Never sent to the storefront."
-              value={internalNote}
-              rows={3}
-              disabled={busy}
-              error={errors.internalNote}
-              onInput={(e) => setInternalNote(e.currentTarget.value)}
-            />
-            <s-stack direction="inline" gap="base" alignItems="center">
-              <s-button variant="primary" type="submit" loading={pending === "save"} disabled={busy}>
-                {enrichment ? "Save badge" : "Add badge"}
-              </s-button>
-              {enrichment && (
-                <s-button
-                  tone="critical"
-                  variant="tertiary"
-                  loading={pending === "remove"}
-                  disabled={busy}
-                  onClick={() =>
-                    fetcher.submit({ intent: "remove" }, { method: "post" })
-                  }
-                >
-                  Remove badge
-                </s-button>
-              )}
-            </s-stack>
-          </s-stack>
-        </form>
-      </s-section>
-
-      <s-section slot="aside" heading="Variants">
-        {product.variants.length === 0 ? (
-          <s-text color="subdued">No variants synced.</s-text>
-        ) : (
-          <s-table>
-            <s-table-header-row>
-              <s-table-header listSlot="primary">Variant</s-table-header>
-              <s-table-header listSlot="secondary">SKU</s-table-header>
-              <s-table-header listSlot="inline" format="numeric">Price</s-table-header>
-            </s-table-header-row>
-            <s-table-body>
-              {product.variants.map((v) => (
-                <s-table-row key={v.id}>
-                  <s-table-cell>{v.title}</s-table-cell>
-                  <s-table-cell>{v.sku || "—"}</s-table-cell>
-                  <s-table-cell>{v.price}</s-table-cell>
-                </s-table-row>
-              ))}
-            </s-table-body>
-          </s-table>
-        )}
-        <s-text color="subdued">Read-only copy from the last sync.</s-text>
-      </s-section>
     </s-page>
   );
 }

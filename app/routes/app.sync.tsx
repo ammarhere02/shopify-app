@@ -127,20 +127,9 @@ export default function Sync() {
           A full sync updates every product and keeps your badges, notes and descriptions.
           Reconcile only marks products that no longer exist in Shopify.
         </s-paragraph>
-        <s-grid gridTemplateColumns="@container (inline-size > 480px) 1fr 1fr, 1fr" gap="base">
-          <s-box padding="base" border="base" borderRadius="base">
-            <s-stack gap="small-200">
-              <s-text color="subdued">Products</s-text>
-              <s-heading>{data.productCount}</s-heading>
-            </s-stack>
-          </s-box>
-          <s-box padding="base" border="base" borderRadius="base">
-            <s-stack gap="small-200">
-              <s-text color="subdued">Variants</s-text>
-              <s-heading>{data.variantCount}</s-heading>
-            </s-stack>
-          </s-box>
-        </s-grid>
+        <s-text>
+          <s-text type="strong">{data.productCount}</s-text> products · <s-text type="strong">{data.variantCount}</s-text> variants stored locally
+        </s-text>
         <s-link href="/app/products">Open the product catalogue</s-link>
       </s-section>
 

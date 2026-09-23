@@ -146,7 +146,7 @@ export default function Products() {
   const skipped = batch.data?.ok ? batch.data.result.skipped : [];
 
   return (
-    <s-page heading="Products" inlineSize="large">
+    <s-page heading="Products">
       <s-link slot="secondary-actions" href="/app/sync">
         Sync
       </s-link>
