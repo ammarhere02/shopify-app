@@ -457,12 +457,12 @@ describe("web research before the description", () => {
     await started.run!();
 
     const [research] = calls("research");
-    expect(research.webSearch).toEqual({ maxUses: 2, maxResults: 5 });
+    expect(research.webSearch).toEqual({ maxUses: 3, maxResults: 5 });
     expect(research.jsonSchema.name).toBe("product_research");
     const parts = research.messages[1].content as Array<{ type: string; text?: string }>;
     expect(parts.map((p) => p.type)).toEqual(["text", "image_url", "image_url"]); // images let the model read the brand from a logo
     expect(parts[0].text).toContain('"vendor": "Acme"');
-    expect(parts[0].text).toContain("at most 2 search(es)");
+    expect(parts[0].text).toContain("at most 3 search(es)");
 
     const [description] = calls("description");
     const block = researchedBlock(description);
@@ -517,7 +517,7 @@ describe("web research before the description", () => {
   });
 
   it.each([
-    ["a provider failure", new AiProviderError("TIMEOUT", "No answer within 60000 ms", true), /failed \(TIMEOUT\)/, "FAILED"],
+    ["a provider failure", new AiProviderError("TIMEOUT", "No answer within 60000 ms", true), /failed \(TIMEOUT: No answer within 60000 ms\)/, "FAILED"],
     ["an unreadable answer", researchResult("not json"), /could not be read/, "UNCERTAIN"],
   ])("still writes the description after %s", async (_label, outcome, reason, status) => {
     nextResearch.push(outcome);

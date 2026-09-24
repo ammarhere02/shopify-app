@@ -186,6 +186,17 @@ describe("failures that are not retried", () => {
     for (const c of [refusal, empty, cut]) expect(c.fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("says why an answer is unusable: the finish reason, the output size and the limit", async () => {
+    const searching = client([ok({ choices: [{ finish_reason: "tool_calls", message: { content: null } }], usage: { completion_tokens: 40 } })]);
+    await expect(searching.ai.generate(request)).rejects.toThrow(
+      /empty answer \(finish reason: tool_calls, 40 output tokens\); the model stopped while it still wanted to search/,
+    );
+    const cut = client([ok({ choices: [{ finish_reason: "length", message: { content: "" } }], usage: { completion_tokens: 1000 } })]);
+    await expect(cut.ai.generate(request)).rejects.toThrow(
+      new RegExp(`cut off at the output token limit of ${request.maxOutputTokens} \\(finish reason: length, 1000 output tokens\\)`),
+    );
+  });
+
   it("maps statuses", () => {
     expect(classifyStatus(429, "")).toMatchObject({ kind: "RATE_LIMITED", retryable: true });
     expect(classifyStatus(408, "")).toMatchObject({ kind: "TIMEOUT", retryable: true });

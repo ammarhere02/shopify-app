@@ -334,7 +334,9 @@ export function prepareFromJob(job: AiGenerationJob & { input: { productSnapshot
 export type RunDeps = Pick<GenerationDeps, "ai" | "config">;
 
 /** Research answers are short JSON; a smaller budget than the description keeps the second call cheap. */
-const RESEARCH_MAX_OUTPUT_TOKENS = 1_000;
+// Room for up to 12 facts with URLs and notes, plus the hidden reasoning tokens that models such as
+// Gemini 2.5 count against the same limit. 1,000 cut off spec-heavy products (phones).
+const RESEARCH_MAX_OUTPUT_TOKENS = 3_000;
 
 type Usage = { promptTokens: number | null; completionTokens: number | null; cost: number | null; latencyMs: number };
 
@@ -382,7 +384,8 @@ async function researchProduct(deps: RunDeps, prepared: Prepared, log: Record<st
   } catch (err) {
     const kind = err instanceof AiProviderError ? err.kind : "INTERNAL";
     logger.warn("ai.research_failed", { ...log, kind, message: err instanceof Error ? err.message : String(err) });
-    return { ...nothing, research: failedResearch(kind) };
+    const detail = err instanceof AiProviderError ? err.message : undefined;
+    return { ...nothing, research: failedResearch(kind, detail) };
   }
 }
 

@@ -261,6 +261,9 @@ describe("validateResearchOutput", () => {
   it("has helper records for skipped and failed research, and a schema that names every field", () => {
     expect(skippedResearch("why")).toMatchObject({ status: "SKIPPED", reason: "why", facts: [], sources: [] });
     expect(failedResearch("TIMEOUT")).toMatchObject({ status: "FAILED", reason: expect.stringMatching(/failed \(TIMEOUT\)/) });
+    expect(failedResearch("INVALID_OUTPUT", "The model returned an empty answer (finish reason: tool_calls)").reason).toBe(
+      "Web research failed (INVALID_OUTPUT: The model returned an empty answer (finish reason: tool_calls)); the draft uses the Shopify product data and your facts only.",
+    );
     const schema = RESEARCH_JSON_SCHEMA.schema as { required: string[]; properties: Record<string, unknown> };
     expect(schema.required.sort()).toEqual(Object.keys(schema.properties).sort());
     expect(RESEARCH_JSON_SCHEMA.name).toBe("product_research");

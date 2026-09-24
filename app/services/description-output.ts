@@ -328,8 +328,11 @@ export const skippedResearch = (reason: string): ResearchRecord => ({
   searches: null,
 });
 
-export const failedResearch = (kind: string): ResearchRecord => ({
-  ...skippedResearch(`Web research failed (${kind}); the draft uses the Shopify product data and your facts only.`),
+/** `detail` is the provider error's message (never the key or the prompt), so the merchant sees the exact cause. */
+export const failedResearch = (kind: string, detail?: string): ResearchRecord => ({
+  ...skippedResearch(
+    `Web research failed (${kind}${detail ? `: ${detail.replace(/\s+/g, " ").trim().slice(0, 300)}` : ""}); the draft uses the Shopify product data and your facts only.`,
+  ),
   status: "FAILED",
 });
 

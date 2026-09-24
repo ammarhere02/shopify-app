@@ -160,7 +160,7 @@ describe("AI configuration", () => {
       dailyLimitPerShop: 50,
       maxConcurrentPerShop: 1,
       research: true,
-      researchMaxSearches: 2,
+      researchMaxSearches: 3,
       researchMaxResults: 5,
     });
     expect(loadAiConfig({ ...env, AI_RESEARCH: "off", AI_RESEARCH_MAX_SEARCHES: "1" })).toMatchObject({ research: false, researchMaxSearches: 1 });

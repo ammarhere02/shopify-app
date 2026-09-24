@@ -279,11 +279,20 @@ export function createOpenRouterClient(config: AiConfig, deps: ClientDeps = {}):
       throw new AiProviderError("REFUSED", "The model declined to describe this product", false);
     }
     const content = choice?.message?.content;
-    if (typeof content !== "string" || !content.trim()) {
-      throw new AiProviderError("INVALID_OUTPUT", "The model returned an empty answer", false);
-    }
+    // The finish reason and output size say WHY an answer is unusable ("tool_calls" = stopped while
+    // still searching, "length" = out of output tokens), so they go into the message the merchant sees.
+    const finish = choice?.finish_reason ?? "none";
+    const outputTokens = typeof body.usage?.completion_tokens === "number" ? `, ${body.usage.completion_tokens} output tokens` : "";
     if (choice?.finish_reason === "length") {
-      throw new AiProviderError("INVALID_OUTPUT", "The answer was cut off at the output token limit", false);
+      throw new AiProviderError(
+        "INVALID_OUTPUT",
+        `The answer was cut off at the output token limit of ${request.maxOutputTokens} (finish reason: length${outputTokens})`,
+        false,
+      );
+    }
+    if (typeof content !== "string" || !content.trim()) {
+      const hint = finish === "tool_calls" ? "; the model stopped while it still wanted to search" : "";
+      throw new AiProviderError("INVALID_OUTPUT", `The model returned an empty answer (finish reason: ${finish}${outputTokens})${hint}`, false);
     }
 
     return {

@@ -83,7 +83,7 @@ export function loadAiConfig(env: Env = process.env): AiConfig {
     dailyLimitPerShop: intInRange(env, "AI_DAILY_LIMIT_PER_SHOP", 50, 1, 10_000),
     maxConcurrentPerShop: intInRange(env, "AI_MAX_CONCURRENT_PER_SHOP", 1, 1, 10),
     research: research === "on",
-    researchMaxSearches: intInRange(env, "AI_RESEARCH_MAX_SEARCHES", 2, 1, 5),
+    researchMaxSearches: intInRange(env, "AI_RESEARCH_MAX_SEARCHES", 3, 1, 5),
     researchMaxResults: intInRange(env, "AI_RESEARCH_MAX_RESULTS", 5, 1, 10),
   };
 }

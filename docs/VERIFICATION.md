@@ -196,7 +196,7 @@ Audit of the review list against the code, with evidence:
 - [x] Double click / browser retry: idempotency key on generate (4 simultaneous → 1 job), conditional `APPROVED → APPLYING` on apply (2 simultaneous → 1 write)
 
 ## AI description: web research with sources
-- [x] Two calls per generation: research (text only, OpenRouter `openrouter:web_search` server tool bounded by `AI_RESEARCH_MAX_SEARCHES` / `AI_RESEARCH_MAX_RESULTS`, `max_tool_calls`) then the description with a `RESEARCHED_FACTS` block (prompt `v4`)
+- [x] Two calls per generation: research (product data, SKUs and the selected images, OpenRouter `openrouter:web_search` server tool bounded by `AI_RESEARCH_MAX_SEARCHES` / `AI_RESEARCH_MAX_RESULTS`, `max_tool_calls`) then the description with a `RESEARCHED_FACTS` block (prompt `v5`); a failed research call shows the provider's exact message (finish reason, output tokens) to the merchant
 - [x] A fact is used only when the exact product was identified with medium/high confidence and its source host is among the pages the search returned (`url_citation`); otherwise `UNCERTAIN` with a warning and nothing used; a failed research call never fails the job
 - [x] Products without a vendor or model-like token are not researched (reason shown); `AI_RESEARCH=off` restores the single-call flow
 - [x] Record stored in `validated_json.research` (no migration), older generations read `null`; usage/cost/latency summed; `research` in `/api/v1` and on the admin page's **Sources** tab with links to every source page; claim detection treats confirmed facts as supported
