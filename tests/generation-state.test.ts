@@ -155,7 +155,7 @@ describe("AI configuration", () => {
       baseUrl: "https://openrouter.ai/api/v1",
       timeoutMs: 60_000,
       maxRetries: 2,
-      maxOutputTokens: 1_500,
+      maxOutputTokens: 4_000,
       maxImages: 4,
       dailyLimitPerShop: 50,
       maxConcurrentPerShop: 1,

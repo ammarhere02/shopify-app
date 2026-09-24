@@ -226,7 +226,7 @@ describe("a successful generation", () => {
 
     const request = calls("description")[0];
     expect(request.model).toBe("vendor/vision:free");
-    expect(request.maxOutputTokens).toBe(1500);
+    expect(request.maxOutputTokens).toBe(4000);
     expect(request.webSearch).toBeUndefined();
     const parts = request.messages[1].content as Array<{ type: string; image_url?: { url: string } }>;
     expect(parts.map((p) => p.type)).toEqual(["text", "image_url"]);

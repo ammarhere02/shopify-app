@@ -675,7 +675,7 @@ State: job `QUEUED → RUNNING → SUCCEEDED | FAILED`; review `DRAFT → APPROV
 | Provider routing and retention | `OPENROUTER_DATA_COLLECTION=deny` (default) restricts routing to providers that do not retain or train on prompts. Free endpoints usually require `allow`; that setting was used only with development-store data |
 | What leaves the server | Product title, vendor, type, tags, current description text, merchant facts, and up to four Shopify CDN image URLs (1024 px). Never the internal note, API keys, or any customer data |
 | What is stored | Snapshot, context, raw and validated output, usage. Never image bytes or the provider key. `raw_json` can be dropped later without affecting the workflow |
-| Token limits | `AI_MAX_OUTPUT_TOKENS` 1500; context ≤ 2000 characters; description HTML ≤ 10,000 characters; ≤ 4 images |
+| Token limits | `AI_MAX_OUTPUT_TOKENS` 4000; context ≤ 2000 characters; description HTML ≤ 10,000 characters; ≤ 4 images |
 | Spend limits | 1 concurrent and 50 generations per shop per 24 h, counted from rows; 10 starts/min per key or shop |
 | Measured cost | Every job stores `promptTokens`, `completionTokens`, `cost` (USD, from OpenRouter's usage accounting) and `latencyMs`, shown on the page. Gemini 2.5 Flash with two images: about 1,100–1,400 prompt tokens, 200–300 completion tokens, **$0.001–0.003 per generation**, 4–8 s. Free models: $0, but daily caps produce `RATE_LIMITED` failures |
 

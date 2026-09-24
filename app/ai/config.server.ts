@@ -78,7 +78,7 @@ export function loadAiConfig(env: Env = process.env): AiConfig {
     dataCollection,
     timeoutMs: intInRange(env, "OPENROUTER_TIMEOUT_MS", 60_000, 1_000, 300_000),
     maxRetries: intInRange(env, "OPENROUTER_MAX_RETRIES", 2, 0, 5),
-    maxOutputTokens: intInRange(env, "AI_MAX_OUTPUT_TOKENS", 1_500, 100, 8_000),
+    maxOutputTokens: intInRange(env, "AI_MAX_OUTPUT_TOKENS", 4_000, 100, 8_000),
     maxImages: intInRange(env, "AI_MAX_IMAGES", 4, 1, 4),
     dailyLimitPerShop: intInRange(env, "AI_DAILY_LIMIT_PER_SHOP", 50, 1, 10_000),
     maxConcurrentPerShop: intInRange(env, "AI_MAX_CONCURRENT_PER_SHOP", 1, 1, 10),

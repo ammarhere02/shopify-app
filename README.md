@@ -58,7 +58,7 @@ npm run dev                   # shopify app dev
 | `OPENROUTER_API_KEY` | Server only. From [openrouter.ai/keys](https://openrouter.ai/keys). Without it the app runs and the AI section says "not configured" |
 | `OPENROUTER_MODELS` | Comma-separated allowlist of models that accept **image input and structured outputs**; the first is the default. See *AI product descriptions* |
 | `OPENROUTER_DATA_COLLECTION` | `deny` (default: only providers that do not retain prompts) or `allow` (needed by most free models; development data only) |
-| `OPENROUTER_TIMEOUT_MS`, `OPENROUTER_MAX_RETRIES`, `AI_MAX_OUTPUT_TOKENS`, `AI_MAX_IMAGES`, `AI_DAILY_LIMIT_PER_SHOP`, `AI_MAX_CONCURRENT_PER_SHOP` | Optional; defaults 60000, 2, 1500, 4, 50, 1 (see `.env.example`) |
+| `OPENROUTER_TIMEOUT_MS`, `OPENROUTER_MAX_RETRIES`, `AI_MAX_OUTPUT_TOKENS`, `AI_MAX_IMAGES`, `AI_DAILY_LIMIT_PER_SHOP`, `AI_MAX_CONCURRENT_PER_SHOP` | Optional; defaults 60000, 2, 4000, 4, 50, 1 (see `.env.example`) |
 | `AI_RESEARCH`, `AI_RESEARCH_MAX_SEARCHES`, `AI_RESEARCH_MAX_RESULTS` | Web research before each description: `on` (default) or `off`; searches per generation (default 3, max 5); results per search (default 5). Each search is billed by OpenRouter on top of the tokens |
 | `AI_WORKER` | Optional; `off` disables the in-process generation worker (queued batches then wait) |
 
