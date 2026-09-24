@@ -1,3 +1,4 @@
+import type { Citation } from "../ai/openrouter-client.server";
 import { htmlToText, sanitizeHtml } from "./html-sanitize";
 
 /**
@@ -218,4 +219,202 @@ export function detectUnsupportedClaims(generated: string, trusted: string): str
 /** Model-reported warnings first, then ours, without duplicates, bounded. */
 export function mergeWarnings(fromModel: string[], detected: string[]) {
   return [...new Set([...fromModel, ...detected])].slice(0, OUTPUT_LIMITS.warnings * 2);
+}
+
+// ---------------------------------------------------------------------------
+// Product research (the web search call that runs before the description)
+// ---------------------------------------------------------------------------
+
+export const RESEARCH_LIMITS = {
+  facts: 12,
+  factLength: 200,
+  matchedProduct: 200,
+  notes: 300,
+  sourceUrl: 500,
+} as const;
+
+/** A specification the research call found, with the page it came from. */
+export type ResearchFact = { fact: string; sourceUrl: string };
+
+export type ResearchStatus =
+  | "USED" // the product was identified and at least one fact had a confirmed source
+  | "UNCERTAIN" // identity or sources not good enough: nothing from the web went into the description
+  | "SKIPPED" // not attempted (switched off, or too little to identify the product)
+  | "FAILED"; // the research call failed; the description used product data only
+
+/**
+ * What a generation records about its research, stored inside `validatedJson.research` and shown
+ * to the merchant. Older generations have no such record (`research: null` in the view).
+ */
+export type ResearchRecord = {
+  status: ResearchStatus;
+  /** One plain sentence for the merchant explaining the status. */
+  reason: string;
+  /** The model's name for the product it believes it found (null when not identified). */
+  matchedProduct: string | null;
+  confidence: "high" | "medium" | "low" | null;
+  /** Facts that passed every check and were given to the description prompt. */
+  facts: ResearchFact[];
+  /** Facts the model offered that were NOT used, each with the reason. Bounded. */
+  rejected: Array<ResearchFact & { reason: string }>;
+  /** Pages the search tool returned (from the provider's citations), for the merchant to open. */
+  sources: Citation[];
+  searches: number | null;
+};
+
+const RESEARCH_FIELDS = ["identified", "matchedProduct", "confidence", "facts", "notes"] as const;
+
+/**
+ * The research answer contract. The model is asked to say whether it identified the EXACT product
+ * and to attach a source URL to every fact. The URL is only trusted when the search tool really
+ * returned that page (see `validateResearchOutput`); the model saying so is not enough.
+ */
+export const RESEARCH_JSON_SCHEMA = {
+  name: "product_research",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: [...RESEARCH_FIELDS],
+    properties: {
+      identified: {
+        type: "boolean",
+        description: "true only when the search results name this exact product or model, not merely a similar one.",
+      },
+      matchedProduct: { type: "string", description: "Full product or model name as the sources give it; empty when not identified." },
+      confidence: { type: "string", enum: ["high", "medium", "low"], description: "How sure you are that the sources describe this exact product." },
+      facts: {
+        type: "array",
+        description: "Concise specifications (dimensions, weight, materials, capacity, compatibility, ingredients, contents). At most 12.",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["fact", "sourceUrl"],
+          properties: {
+            fact: { type: "string", description: "One specification in plain text, under 200 characters." },
+            sourceUrl: { type: "string", description: "The exact URL of the search result that states this fact." },
+          },
+        },
+      },
+      notes: { type: "string", description: "One short sentence on what was found or why identification failed." },
+    },
+  } as Record<string, unknown>,
+};
+
+export type ResearchValidation = { record: ResearchRecord; ok: boolean; reason?: string };
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return null;
+  }
+};
+
+const plainLine = (value: unknown, max: number) =>
+  typeof value === "string" ? htmlToText(value).replace(/\s+/g, " ").trim().slice(0, max) : "";
+
+export const skippedResearch = (reason: string): ResearchRecord => ({
+  status: "SKIPPED",
+  reason,
+  matchedProduct: null,
+  confidence: null,
+  facts: [],
+  rejected: [],
+  sources: [],
+  searches: null,
+});
+
+export const failedResearch = (kind: string): ResearchRecord => ({
+  ...skippedResearch(`Web research failed (${kind}); the draft uses the Shopify product data and your facts only.`),
+  status: "FAILED",
+});
+
+/**
+ * Turn the research answer into a record the description call and the merchant can rely on.
+ * Never throws and never fails the generation: anything doubtful ends as UNCERTAIN with the reason.
+ * A fact is kept only when ALL of these hold:
+ *  - the model says it identified the exact product with medium or high confidence;
+ *  - the fact is a non-empty plain line within the length limit;
+ *  - its source is an http(s) URL on a host the search tool actually returned (citations).
+ *    Identity and sources come from the provider's own record of the searches, not from the model's claim.
+ */
+export function validateResearchOutput(content: string, citations: Citation[], searches: number | null): ResearchValidation {
+  const base = { ...skippedResearch(""), sources: citations.slice(0, RESEARCH_LIMITS.facts * 2), searches };
+  const uncertain = (reason: string, extra: Partial<ResearchRecord> = {}): ResearchValidation => ({
+    ok: false,
+    reason,
+    record: { ...base, ...extra, status: "UNCERTAIN", reason },
+  });
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(unwrapFence(content));
+  } catch {
+    return uncertain("The research answer could not be read, so no web facts were used.");
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return uncertain("The research answer could not be read, so no web facts were used.");
+  }
+  const obj = raw as Record<string, unknown>;
+  const matchedProduct = plainLine(obj.matchedProduct, RESEARCH_LIMITS.matchedProduct) || null;
+  const confidence = obj.confidence === "high" || obj.confidence === "medium" || obj.confidence === "low" ? obj.confidence : null;
+  const offered: unknown[] = Array.isArray(obj.facts) ? obj.facts.slice(0, RESEARCH_LIMITS.facts * 2) : [];
+  const notes = plainLine(obj.notes, RESEARCH_LIMITS.notes);
+
+  if (obj.identified !== true || confidence === null || confidence === "low") {
+    return uncertain(
+      `The exact product could not be identified online${notes ? ` (${notes})` : ""}; researched specifications were not used.`,
+      { matchedProduct, confidence, rejected: [] },
+    );
+  }
+
+  const citedHosts = new Set(citations.map((c) => hostOf(c.url)).filter((h): h is string => !!h));
+  const facts: ResearchFact[] = [];
+  const rejected: ResearchRecord["rejected"] = [];
+  const seen = new Set<string>();
+  for (const item of offered) {
+    const entry = item as { fact?: unknown; sourceUrl?: unknown } | null;
+    const fact = plainLine(entry?.fact, RESEARCH_LIMITS.factLength + 1);
+    const sourceUrl = typeof entry?.sourceUrl === "string" ? entry.sourceUrl.trim().slice(0, RESEARCH_LIMITS.sourceUrl) : "";
+    if (!fact) continue;
+    const reject = (reason: string) => rejected.length < RESEARCH_LIMITS.facts && rejected.push({ fact: fact.slice(0, RESEARCH_LIMITS.factLength), sourceUrl, reason });
+    if (fact.length > RESEARCH_LIMITS.factLength) {
+      reject("Too long to be one specification");
+      continue;
+    }
+    const host = hostOf(sourceUrl);
+    if (!host || !/^https?:/i.test(sourceUrl)) {
+      reject("No usable source URL");
+      continue;
+    }
+    if (!citedHosts.has(host)) {
+      reject("Source was not among the pages the search returned");
+      continue;
+    }
+    const key = fact.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (facts.length < RESEARCH_LIMITS.facts) facts.push({ fact, sourceUrl });
+  }
+
+  if (facts.length === 0) {
+    const why = citations.length === 0 ? "the search returned no pages to confirm the sources" : "no specification had a confirmed source";
+    return uncertain(`Product identified as "${matchedProduct ?? "unknown"}" but ${why}; researched specifications were not used.`, {
+      matchedProduct,
+      confidence,
+      rejected,
+    });
+  }
+  return {
+    ok: true,
+    record: {
+      ...base,
+      status: "USED",
+      reason: `${facts.length} specification${facts.length === 1 ? "" : "s"} for "${matchedProduct ?? "the product"}" came from web sources (${confidence} confidence). Check them against the linked pages before approving.`,
+      matchedProduct,
+      confidence,
+      facts,
+      rejected,
+    },
+  };
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadAiConfig } from "../app/ai/config.server";
-import { AiProviderError, classifyStatus, createOpenRouterClient } from "../app/ai/openrouter-client.server";
+import { AiProviderError, classifyStatus, createOpenRouterClient, extractCitations } from "../app/ai/openrouter-client.server";
 import type { GenerationRequest } from "../app/ai/openrouter-client.server";
 
 const KEY = "sk-or-v1-secret-value";
@@ -81,6 +81,41 @@ describe("request", () => {
       completionTokens: 240,
       cost: 0,
     });
+  });
+
+  it("sends no tools without web search, and reports no citations or searches", async () => {
+    const { ai, fetchMock } = client([ok()]);
+    const result = await ai.generate(request);
+    const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect(body).not.toHaveProperty("tools");
+    expect(body).not.toHaveProperty("max_tool_calls");
+    expect(result).toMatchObject({ citations: [], searchCount: null });
+  });
+
+  it("adds the bounded web search server tool and returns the cited pages and search count", async () => {
+    const annotations = [
+      { type: "url_citation", url_citation: { url: "https://www.acme.example/specs", title: "Specs" } },
+      { type: "url_citation", url_citation: { url: "https://www.acme.example/specs" } }, // duplicate
+      { type: "url_citation", url_citation: { url: "ftp://acme.example/x" } }, // not http(s)
+      { type: "url_citation", url_citation: { url: "not a url" } },
+      { type: "other", url_citation: { url: "https://ignored.example/" } },
+    ];
+    const { ai, fetchMock } = client([
+      ok({
+        choices: [{ finish_reason: "stop", message: { content: '{"a":1}', annotations } }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.01, server_tool_use: { web_search_requests: 2 } },
+      }),
+    ]);
+    const result = await ai.generate({ ...request, webSearch: { maxUses: 2, maxResults: 5 } });
+    const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect(body.tools).toEqual([
+      { type: "openrouter:web_search", parameters: { max_uses: 2, max_results: 5, max_total_results: 10 } },
+    ]);
+    expect(body.max_tool_calls).toBe(2);
+    expect(body.response_format.type).toBe("json_schema"); // the research answer is structured too
+    expect(result.citations).toEqual([{ url: "https://www.acme.example/specs", title: "Specs" }]);
+    expect(result.searchCount).toBe(2);
+    expect(extractCitations(undefined)).toEqual([]);
   });
 
   it("succeeds when usage is missing", async () => {

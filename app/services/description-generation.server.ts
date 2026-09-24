@@ -1,8 +1,9 @@
 /**
- * Purpose: Creates and runs one AI description generation job.
+ * Purpose: Creates and runs one AI description generation job (web research, then the description).
  * Called by: The admin generation route and the /api/v1 generation routes (start); the worker (run).
  * Input: Shop, product, selected media ids, merchant context, model, idempotency key.
- * Output: A QUEUED job row (plus a run function for inline use) that ends SUCCEEDED with a draft or FAILED.
+ * Output: A QUEUED job row (plus a run function for inline use) that ends SUCCEEDED with a draft
+ *         (and a research record with source URLs) or FAILED.
  * Uses: Shopify client (product + images), OpenRouter client, ai-generation repository.
  * Does not: Write anything to Shopify or decide what the merchant approves.
  */
@@ -28,14 +29,21 @@ import {
 } from "../repositories/ai-generation.server";
 import {
   DESCRIPTION_JSON_SCHEMA,
+  RESEARCH_JSON_SCHEMA,
   detectUnsupportedClaims,
+  failedResearch,
   mergeWarnings,
+  skippedResearch,
   validateModelOutput,
+  validateResearchOutput,
 } from "./description-output";
+import type { ResearchRecord } from "./description-output";
 import {
   MERCHANT_CONTEXT_MAX,
   PROMPT_VERSION,
   buildDescriptionMessages,
+  buildResearchMessages,
+  researchPlan,
   trustedText,
 } from "./description-prompt";
 import type { PromptImage, PromptProduct } from "./description-prompt";
@@ -316,9 +324,63 @@ export function prepareFromJob(job: AiGenerationJob & { input: { productSnapshot
 /** What a worker needs to run a job: no Shopify client, the snapshot already holds the product. */
 export type RunDeps = Pick<GenerationDeps, "ai" | "config">;
 
+/** Research answers are short JSON; a smaller budget than the description keeps the second call cheap. */
+const RESEARCH_MAX_OUTPUT_TOKENS = 1_000;
+
+type Usage = { promptTokens: number | null; completionTokens: number | null; cost: number | null; latencyMs: number };
+
+const addNullable = (a: number | null, b: number | null) => (a === null && b === null ? null : (a ?? 0) + (b ?? 0));
+
+/**
+ * Call 1 of 2: ask the model, with the web search tool, for the exact product's specifications.
+ * Never throws and never fails the job. Any failure (provider error, unreadable answer, product not
+ * identified, sources not confirmed) ends as a record the merchant sees; the description is then
+ * written from the Shopify data alone. Returns the record and what the call cost.
+ */
+async function researchProduct(deps: RunDeps, prepared: Prepared, log: Record<string, unknown>): Promise<{ research: ResearchRecord; usage: Usage | null }> {
+  const nothing = { usage: null };
+  if (!deps.config.research) return { ...nothing, research: skippedResearch("Not researched: web research is switched off for this app.") };
+  const plan = researchPlan(prepared.product);
+  if (!plan.research) return { ...nothing, research: skippedResearch(plan.reason) };
+
+  try {
+    const result = await deps.ai.generate({
+      model: prepared.model,
+      messages: buildResearchMessages({
+        product: prepared.product,
+        merchantContext: prepared.merchantContext,
+        maxSearches: deps.config.researchMaxSearches,
+      }),
+      jsonSchema: RESEARCH_JSON_SCHEMA,
+      maxOutputTokens: RESEARCH_MAX_OUTPUT_TOKENS,
+      webSearch: { maxUses: deps.config.researchMaxSearches, maxResults: deps.config.researchMaxResults },
+    });
+    const checked = validateResearchOutput(result.content, result.citations, result.searchCount);
+    logger.info("ai.research_done", {
+      ...log,
+      status: checked.record.status,
+      facts: checked.record.facts.length,
+      rejected: checked.record.rejected.length,
+      citations: result.citations.length,
+      searches: result.searchCount,
+      latencyMs: result.latencyMs,
+    });
+    return {
+      research: checked.record,
+      usage: { promptTokens: result.promptTokens, completionTokens: result.completionTokens, cost: result.cost, latencyMs: result.latencyMs },
+    };
+  } catch (err) {
+    const kind = err instanceof AiProviderError ? err.kind : "INTERNAL";
+    logger.warn("ai.research_failed", { ...log, kind, message: err instanceof Error ? err.message : String(err) });
+    return { ...nothing, research: failedResearch(kind) };
+  }
+}
+
 /**
  * The background part. Never throws: every outcome ends as a job state.
- * An invalid or refused answer FAILS the job and is not retried; the merchant regenerates,
+ * Two provider calls: research (web search, optional, never fatal) then the description, which
+ * receives only the research facts whose sources were confirmed.
+ * An invalid or refused description FAILS the job and is not retried; the merchant regenerates,
  * which creates a new, linked job. Temporary provider failures were already retried by the client.
  */
 export async function runGeneration(
@@ -332,9 +394,11 @@ export async function runGeneration(
   try {
     if (!options.leased && !(await markJobRunning(shopId, jobId))) return;
 
+    const { research, usage: researchUsage } = await researchProduct(deps, prepared, log);
+
     const result = await deps.ai.generate({
       model: prepared.model,
-      messages: buildDescriptionMessages(prepared),
+      messages: buildDescriptionMessages({ ...prepared, researchFacts: research.facts }),
       jsonSchema: DESCRIPTION_JSON_SCHEMA,
       maxOutputTokens: deps.config.maxOutputTokens,
     });
@@ -355,20 +419,24 @@ export async function runGeneration(
       checked.value.seoDescription,
       ...checked.value.highlights,
     ].join("\n");
+    // Research that did not end in USED is a warning the merchant must read before approving;
+    // a skipped research is only informative and stays in the Sources view.
+    const researchWarnings = research.status === "UNCERTAIN" || research.status === "FAILED" ? [research.reason] : [];
     const warnings = mergeWarnings(
-      checked.value.warnings,
-      detectUnsupportedClaims(generatedText, trustedText(prepared.product, prepared.merchantContext)),
+      [...checked.value.warnings, ...researchWarnings],
+      detectUnsupportedClaims(generatedText, trustedText(prepared.product, prepared.merchantContext, research.facts)),
     );
 
+    // Both calls are one generation to the merchant: usage, cost and time are summed.
     const saved = await completeJob(shopId, jobId, {
       rawJson: checked.raw as object,
-      validatedJson: checked.value,
+      validatedJson: { ...checked.value, research },
       warnings,
-      promptTokens: result.promptTokens,
-      completionTokens: result.completionTokens,
-      cost: result.cost,
+      promptTokens: addNullable(result.promptTokens, researchUsage?.promptTokens ?? null),
+      completionTokens: addNullable(result.completionTokens, researchUsage?.completionTokens ?? null),
+      cost: addNullable(result.cost, researchUsage?.cost ?? null),
       generationId: result.generationId,
-      latencyMs: result.latencyMs,
+      latencyMs: result.latencyMs + (researchUsage?.latencyMs ?? 0),
       draftHtml: checked.value.descriptionHtml,
     });
     logger.info(saved ? "ai.job_succeeded" : "ai.job_result_discarded", {
@@ -376,6 +444,7 @@ export async function runGeneration(
       latencyMs: result.latencyMs,
       generationId: result.generationId,
       warnings: warnings.length,
+      research: research.status,
     });
   } catch (err) {
     const kind = err instanceof AiProviderError ? err.kind : "INTERNAL";

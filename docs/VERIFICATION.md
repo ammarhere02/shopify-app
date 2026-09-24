@@ -195,6 +195,14 @@ Audit of the review list against the code, with evidence:
 - [x] Error envelopes: `ShopifyApiError` → 429/502/409 with codes instead of 500, without Shopify's text; admin page gets the same sentence and stays retryable
 - [x] Double click / browser retry: idempotency key on generate (4 simultaneous → 1 job), conditional `APPROVED → APPLYING` on apply (2 simultaneous → 1 write)
 
+## AI description: web research with sources
+- [x] Two calls per generation: research (text only, OpenRouter `openrouter:web_search` server tool bounded by `AI_RESEARCH_MAX_SEARCHES` / `AI_RESEARCH_MAX_RESULTS`, `max_tool_calls`) then the description with a `RESEARCHED_FACTS` block (prompt `v4`)
+- [x] A fact is used only when the exact product was identified with medium/high confidence and its source host is among the pages the search returned (`url_citation`); otherwise `UNCERTAIN` with a warning and nothing used; a failed research call never fails the job
+- [x] Products without a vendor or model-like token are not researched (reason shown); `AI_RESEARCH=off` restores the single-call flow
+- [x] Record stored in `validated_json.research` (no migration), older generations read `null`; usage/cost/latency summed; `research` in `/api/v1` and on the admin page's **Sources** tab with links to every source page; claim detection treats confirmed facts as supported
+- [x] Tests: validator (cited host, uncited, `javascript:`, over-long, not identified, low confidence, no citations, unreadable), plan, prompts, client request body and citation parsing, service flow (used / ambiguous / uncited / provider failure / unreadable / skipped), API response shape
+- [ ] Live run against a real product with a vendor and model number (not yet done in this change; needs a model that supports tool calling)
+
 ## AI description: batch generation and worker
 
 - [x] `POST /api/v1/description-generations/batch` and *Generate descriptions for selected* on the Products list: one QUEUED job per product (max 20, first images up to `AI_MAX_IMAGES`), products without images reported as skipped, per-product idempotency key from the batch key, other shop's id refused before anything is created, daily limit stops the batch and keeps what was queued

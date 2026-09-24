@@ -1,8 +1,10 @@
 /**
- * Purpose: The only code that talks to OpenRouter (chat completion with images and a JSON schema).
+ * Purpose: The only code that talks to OpenRouter (chat completion with images, a JSON schema and,
+ *          for product research, OpenRouter's web search server tool).
  * Called by: runGeneration, through the OpenRouterClient interface.
- * Input: Model, messages (text first, then image URLs), JSON schema, token limit.
- * Output: The raw answer text plus usage, cost, latency and generation id; or AiProviderError.
+ * Input: Model, messages (text first, then image URLs), JSON schema, token limit, optional web-search limits.
+ * Output: The raw answer text plus usage, cost, latency, generation id, search count and the URLs the
+ *         search tool actually returned (citations); or AiProviderError.
  * Uses: fetch to the OpenRouter API, with timeout and bounded retries.
  * Does not: Validate or sanitize the answer, or log the prompt, images, answer or key.
  */
@@ -46,14 +48,30 @@ export type ChatMessage =
   | { role: "system"; content: string }
   | { role: "user"; content: ChatContentPart[] };
 
+/**
+ * Bounds for OpenRouter's `openrouter:web_search` server tool. The model decides when to search;
+ * these caps bound what one request can spend (each search is billed on top of the tokens).
+ */
+export type WebSearchOptions = {
+  /** Searches the model may run in this request (`max_uses` and `max_tool_calls`). */
+  maxUses: number;
+  /** Results per search (`max_results`). */
+  maxResults: number;
+};
+
 export type GenerationRequest = {
   model: string;
   messages: ChatMessage[];
   /** JSON Schema the provider must enforce (strict). The server validates again. */
   jsonSchema: { name: string; schema: Record<string, unknown> };
   maxOutputTokens: number;
+  /** When set, the request carries the web search server tool with these limits. */
+  webSearch?: WebSearchOptions;
   signal?: AbortSignal;
 };
+
+/** A page the search tool returned to the model, as OpenRouter reports it in `annotations`. */
+export type Citation = { url: string; title: string | null };
 
 export type GenerationResult = {
   /** Message content exactly as returned. Untrusted until validated. */
@@ -65,6 +83,13 @@ export type GenerationResult = {
   /** USD, when the provider reports it. */
   cost: number | null;
   latencyMs: number;
+  /**
+   * URLs the search tool really fetched for this answer (`url_citation` annotations), deduplicated.
+   * Empty without web search. The research validator only trusts a source that appears here.
+   */
+  citations: Citation[];
+  /** Searches the model ran (`usage.server_tool_use.web_search_requests`), null when not reported. */
+  searchCount: number | null;
 };
 
 export interface OpenRouterClient {
@@ -87,6 +112,13 @@ type ClientDeps = {
 /** A provider asking us to wait longer than this is treated as a failure, not slept through. */
 const MAX_RETRY_WAIT_MS = 15_000;
 const ERROR_TEXT_MAX = 300;
+const CITATIONS_MAX = 40;
+const CITATION_TITLE_MAX = 200;
+
+type Annotation = {
+  type?: string;
+  url_citation?: { url?: unknown; title?: unknown };
+};
 
 type CompletionBody = {
   id?: string;
@@ -95,9 +127,14 @@ type CompletionBody = {
   choices?: Array<{
     finish_reason?: string | null;
     error?: { code?: number | string; message?: string };
-    message?: { content?: string | null; refusal?: string | null };
+    message?: { content?: string | null; refusal?: string | null; annotations?: Annotation[] };
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    cost?: number;
+    server_tool_use?: { web_search_requests?: number };
+  };
 };
 
 /** HTTP status → error kind. 408/429/5xx are temporary; everything else will fail the same way again. */
@@ -120,6 +157,29 @@ function retryAfterMs(res: Response): number | null {
 }
 
 const numberOrNull = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** `url_citation` annotations → unique http(s) URLs. Anything malformed is dropped, never thrown. */
+export function extractCitations(annotations: unknown): Citation[] {
+  if (!Array.isArray(annotations)) return [];
+  const seen = new Set<string>();
+  const citations: Citation[] = [];
+  for (const item of annotations as Annotation[]) {
+    const url = item?.url_citation?.url;
+    if (item?.type !== "url_citation" || typeof url !== "string") continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      continue;
+    }
+    if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") || seen.has(parsed.href)) continue;
+    seen.add(parsed.href);
+    const title = item.url_citation?.title;
+    citations.push({ url: parsed.href, title: typeof title === "string" && title.trim() ? title.trim().slice(0, CITATION_TITLE_MAX) : null });
+    if (citations.length >= CITATIONS_MAX) break;
+  }
+  return citations;
+}
 
 /**
  * OpenRouter chat completions with a per-attempt timeout and a bounded retry for temporary
@@ -159,7 +219,24 @@ export function createOpenRouterClient(config: AiConfig, deps: ClientDeps = {}):
             type: "json_schema",
             json_schema: { name: request.jsonSchema.name, strict: true, schema: request.jsonSchema.schema },
           },
-          // Route only to endpoints that honour every parameter above (images + json_schema).
+          // OpenRouter runs the searches server-side and returns one final answer with citations.
+          // Both caps bound the spend: max_uses per tool, max_tool_calls for the whole request.
+          ...(request.webSearch
+            ? {
+                tools: [
+                  {
+                    type: "openrouter:web_search",
+                    parameters: {
+                      max_uses: request.webSearch.maxUses,
+                      max_results: request.webSearch.maxResults,
+                      max_total_results: request.webSearch.maxUses * request.webSearch.maxResults,
+                    },
+                  },
+                ],
+                max_tool_calls: request.webSearch.maxUses,
+              }
+            : {}),
+          // Route only to endpoints that honour every parameter above (images + json_schema [+ tools]).
           provider: { require_parameters: true, data_collection: config.dataCollection },
           usage: { include: true },
         }),
@@ -218,6 +295,8 @@ export function createOpenRouterClient(config: AiConfig, deps: ClientDeps = {}):
       completionTokens: numberOrNull(body.usage?.completion_tokens),
       cost: numberOrNull(body.usage?.cost),
       latencyMs: now() - started,
+      citations: extractCitations(choice?.message?.annotations),
+      searchCount: numberOrNull(body.usage?.server_tool_use?.web_search_requests),
     };
   }
 
@@ -237,6 +316,9 @@ export function createOpenRouterClient(config: AiConfig, deps: ClientDeps = {}):
             usagePrompt: result.promptTokens,
             usageCompletion: result.completionTokens,
             cost: result.cost,
+            webSearch: !!request.webSearch,
+            searches: result.searchCount,
+            citations: result.citations.length,
           });
           return result;
         } catch (raw) {

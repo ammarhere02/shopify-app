@@ -159,7 +159,13 @@ describe("AI configuration", () => {
       maxImages: 4,
       dailyLimitPerShop: 50,
       maxConcurrentPerShop: 1,
+      research: true,
+      researchMaxSearches: 2,
+      researchMaxResults: 5,
     });
+    expect(loadAiConfig({ ...env, AI_RESEARCH: "off", AI_RESEARCH_MAX_SEARCHES: "1" })).toMatchObject({ research: false, researchMaxSearches: 1 });
+    expect(() => loadAiConfig({ ...env, AI_RESEARCH: "maybe" })).toThrow(/AI_RESEARCH/);
+    expect(() => loadAiConfig({ ...env, AI_RESEARCH_MAX_SEARCHES: "6" })).toThrow(/AI_RESEARCH_MAX_SEARCHES/);
   });
 
   it("fails clearly without a key or a model, and never echoes the key", () => {

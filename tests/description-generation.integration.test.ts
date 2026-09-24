@@ -12,6 +12,7 @@ import {
   startGeneration,
 } from "../app/services/description-generation.server";
 import type { GenerationDeps, StartGenerationInput } from "../app/services/description-generation.server";
+import type { ResearchRecord } from "../app/services/description-output";
 import { JOB_ABANDON_MS } from "../app/services/generation-state";
 import { sha256Hex } from "../app/services/input-hash.server";
 
@@ -80,7 +81,7 @@ const answer = {
   highlights: ["Warm"],
   warnings: ["Colour judged from the photo"],
 };
-const result = (content: string): GenerationResult => ({
+const result = (content: string, overrides: Partial<GenerationResult> = {}): GenerationResult => ({
   content,
   generationId: "gen-1",
   model: "vendor/vision:free",
@@ -88,7 +89,35 @@ const result = (content: string): GenerationResult => ({
   completionTokens: 200,
   cost: 0,
   latencyMs: 1500,
+  citations: [],
+  searchCount: null,
+  ...overrides,
 });
+
+/** A research answer whose sources the search tool really returned (citations on the same host). */
+const OFFICIAL = "https://www.acme.example/beanies/blue-beanie-specs";
+const researchAnswer = {
+  identified: true,
+  matchedProduct: "Acme Blue Beanie",
+  confidence: "high",
+  facts: [
+    { fact: "Made of 100% merino wool", sourceUrl: OFFICIAL },
+    { fact: "One size, fits head circumference 54-60 cm", sourceUrl: OFFICIAL },
+    { fact: "Weighs 45 g", sourceUrl: "https://invented.example/nowhere" }, // never cited → must be dropped
+  ],
+  notes: "Official product page found.",
+};
+const researchResult = (content = JSON.stringify(researchAnswer), overrides: Partial<GenerationResult> = {}) =>
+  result(content, {
+    generationId: "gen-research",
+    promptTokens: 300,
+    completionTokens: 100,
+    cost: 0.01,
+    latencyMs: 700,
+    citations: [{ url: OFFICIAL, title: "Blue Beanie – Acme" }],
+    searchCount: 1,
+    ...overrides,
+  });
 
 const config = loadAiConfig({
   OPENROUTER_API_KEY: "sk-test",
@@ -98,6 +127,13 @@ const config = loadAiConfig({
 let generate: ReturnType<typeof vi.fn<(request: GenerationRequest) => Promise<GenerationResult>>>;
 let shopifyQuery: ReturnType<typeof vi.fn>;
 let deps: GenerationDeps;
+/** One-shot overrides, consumed by the next call of that kind. An Error is thrown, a result returned. */
+let nextResearch: Array<GenerationResult | Error>;
+let nextDescription: Array<GenerationResult | Error>;
+const isResearch = (request: GenerationRequest) => request.jsonSchema.name === "product_research";
+const calls = (kind: "research" | "description") =>
+  generate.mock.calls.map((c) => c[0]).filter((r) => isResearch(r) === (kind === "research"));
+const descriptionCalls = () => calls("description").length;
 
 const input = (overrides: Partial<StartGenerationInput> = {}): StartGenerationInput => ({
   productId: product.id,
@@ -118,7 +154,15 @@ const errorOf = async (promise: Promise<unknown>) => {
 beforeEach(async () => {
   shop = await makeShop();
   product = await makeProduct(shop.id);
-  generate = vi.fn(async () => result(JSON.stringify(answer)));
+  nextResearch = [];
+  nextDescription = [];
+  // Two calls per job: research (web search) first, then the description. Each kind has its own queue.
+  generate = vi.fn(async (request: GenerationRequest) => {
+    const queued = (isResearch(request) ? nextResearch : nextDescription).shift();
+    if (queued instanceof Error) throw queued;
+    if (queued) return queued;
+    return isResearch(request) ? researchResult() : result(JSON.stringify(answer));
+  });
   shopifyQuery = vi.fn(async (_name: string, _doc: string, variables: { id: string }) => ({
     product: shopifyProduct(variables.id),
   }));
@@ -143,7 +187,7 @@ describe("a successful generation", () => {
   it("returns a QUEUED job first, then the run stores a sanitized draft, warnings and usage", async () => {
     const started = await startGeneration(deps, shop.id, input());
     expect(started.created).toBe(true);
-    expect(started.job).toMatchObject({ status: "QUEUED", model: "vendor/vision:free", provider: "openrouter", promptVersion: "v3" });
+    expect(started.job).toMatchObject({ status: "QUEUED", model: "vendor/vision:free", provider: "openrouter", promptVersion: "v4" });
     expect(started.job.inputHash).toMatch(/^[0-9a-f]{64}$/);
     expect(generate).not.toHaveBeenCalled();
 
@@ -154,7 +198,9 @@ describe("a successful generation", () => {
       reviewStatus: "DRAFT",
       draftHtml: "<p>A warm beanie, waterproof and made of 100% wool.</p>",
     });
-    expect(job!.output).toMatchObject({ generationId: "gen-1", promptTokens: 800, completionTokens: 200, latencyMs: 1500 });
+    // Usage is the sum of both calls; the generation id is the description call's.
+    expect(job!.output).toMatchObject({ generationId: "gen-1", promptTokens: 1100, completionTokens: 300, latencyMs: 2200 });
+    expect(Number(job!.output!.cost)).toBeCloseTo(0.01);
     expect(job!.output!.rawJson).toEqual(answer); // the model's words, untouched
     expect((job!.output!.validatedJson as { descriptionHtml: string }).descriptionHtml).not.toContain("script");
 
@@ -162,6 +208,7 @@ describe("a successful generation", () => {
     expect(warnings).toContain("Colour judged from the photo");
     expect(warnings.some((w) => w.includes("performance"))).toBe(true); // "waterproof" is nowhere in the trusted data
     expect(warnings.some((w) => w.includes("material"))).toBe(false); // "100% wool" is in the current description
+    expect(generate).toHaveBeenCalledTimes(2);
   });
 
   it("snapshots what Apply needs later and sends only this product's Shopify images", async () => {
@@ -177,9 +224,10 @@ describe("a successful generation", () => {
       images: [{ id: IMG2, url: "https://cdn.shopify.com/2.jpg", alt: null }],
     });
 
-    const request = generate.mock.calls[0][0];
+    const request = calls("description")[0];
     expect(request.model).toBe("vendor/vision:free");
     expect(request.maxOutputTokens).toBe(1500);
+    expect(request.webSearch).toBeUndefined();
     const parts = request.messages[1].content as Array<{ type: string; image_url?: { url: string } }>;
     expect(parts.map((p) => p.type)).toEqual(["text", "image_url"]);
     expect(parts[1].image_url!.url).toBe("https://cdn.shopify.com/2.jpg");
@@ -204,7 +252,7 @@ describe("idempotency", () => {
     expect(again).toMatchObject({ created: false });
     expect(again.job.id).toBe(first.job.id);
     expect(again.run).toBeUndefined();
-    expect(generate).toHaveBeenCalledTimes(1);
+    expect(descriptionCalls()).toBe(1);
     expect(shopifyQuery).toHaveBeenCalledTimes(1);
   });
 
@@ -225,17 +273,17 @@ describe("idempotency", () => {
 
 describe("failures end as diagnosable FAILED jobs", () => {
   it("fails, without retrying, when the answer is not valid", async () => {
-    generate.mockResolvedValueOnce(result('Sure! {"descriptionHtml": "<p>x</p>"'));
+    nextDescription.push(result('Sure! {"descriptionHtml": "<p>x</p>"'));
     const started = await startGeneration(deps, shop.id, input());
     await started.run!();
     const job = await getJob(shop.id, started.job.id);
     expect(job).toMatchObject({ status: "FAILED", reviewStatus: null, draftHtml: null, output: null });
     expect(job!.error).toMatch(/^INVALID_OUTPUT: Model output is not valid JSON\. Model said: Sure!/);
-    expect(generate).toHaveBeenCalledTimes(1);
+    expect(descriptionCalls()).toBe(1);
   });
 
   it("fails on an extra field even though the JSON parses", async () => {
-    generate.mockResolvedValueOnce(result(JSON.stringify({ ...answer, price: "9.99" })));
+    nextDescription.push(result(JSON.stringify({ ...answer, price: "9.99" })));
     const started = await startGeneration(deps, shop.id, input());
     await started.run!();
     expect((await getJob(shop.id, started.job.id))!.error).toMatch(/Unexpected field: price/);
@@ -246,7 +294,7 @@ describe("failures end as diagnosable FAILED jobs", () => {
     ["RATE_LIMITED", new AiProviderError("RATE_LIMITED", "OpenRouter returned 429", true)],
     ["TIMEOUT", new AiProviderError("TIMEOUT", "No answer within 60000 ms", true)],
   ])("records a %s provider failure", async (kind, error) => {
-    generate.mockRejectedValueOnce(error);
+    nextDescription.push(error);
     const started = await startGeneration(deps, shop.id, input());
     await started.run!(); // never throws
     const job = await getJob(shop.id, started.job.id);
@@ -256,7 +304,7 @@ describe("failures end as diagnosable FAILED jobs", () => {
   });
 
   it("hides internal error text and frees the slot for a regeneration", async () => {
-    generate.mockRejectedValueOnce(new Error("connect ECONNREFUSED 10.0.0.5:3306 password=hunter2"));
+    nextDescription.push(new Error("connect ECONNREFUSED 10.0.0.5:3306 password=hunter2"));
     const failed = await startGeneration(deps, shop.id, input());
     await failed.run!();
     expect((await getJob(shop.id, failed.job.id))!.error).toBe("INTERNAL: Unexpected error while generating");
@@ -349,14 +397,14 @@ describe("spend limits, counted in MySQL", () => {
   });
 
   it("stops at the daily limit, counting failed attempts too", async () => {
-    generate.mockRejectedValueOnce(new AiProviderError("RATE_LIMITED", "429", true));
+    nextDescription.push(new AiProviderError("RATE_LIMITED", "429", true));
     for (let i = 0; i < 3; i++) {
       const started = await startGeneration(deps, shop.id, input());
       await started.run!();
     }
     const error = await errorOf(startGeneration(deps, shop.id, input()));
     expect(error).toMatchObject({ code: "LIMIT", message: expect.stringMatching(/Daily/) });
-    expect(generate).toHaveBeenCalledTimes(3);
+    expect(descriptionCalls()).toBe(3);
   });
 
   it("releases the slot of a job that was lost with its process", async () => {
@@ -387,8 +435,124 @@ describe("logging", () => {
     expect(all).toContain('"event":"ai.job_created"');
     expect(all).toContain('"event":"ai.job_succeeded"');
     expect(all).toContain(`"jobId":${started.job.id}`);
-    for (const secret of ["SECRET LAUNCH PLAN", "cdn.shopify.com", "warm beanie", "Old description", "sk-test"]) {
+    expect(all).toContain('"event":"ai.research_done"');
+    for (const secret of ["SECRET LAUNCH PLAN", "cdn.shopify.com", "warm beanie", "Old description", "sk-test", "acme.example", "merino"]) {
       expect(all).not.toContain(secret);
     }
+  });
+});
+
+describe("web research before the description", () => {
+  const stored = async (jobId: number) => {
+    const job = await getJob(shop.id, jobId);
+    return { job: job!, research: (job!.output!.validatedJson as { research: ResearchRecord }).research };
+  };
+  const researchedBlock = (request: GenerationRequest) => {
+    const text = (request.messages[1].content as Array<{ type: string; text?: string }>)[0].text!;
+    return text.slice(text.indexOf("<<<RESEARCHED_FACTS"), text.indexOf("RESEARCHED_FACTS>>>"));
+  };
+
+  it("searches with the product identifiers only, then passes confirmed facts and sources to the description", async () => {
+    const started = await startGeneration(deps, shop.id, input());
+    await started.run!();
+
+    const [research] = calls("research");
+    expect(research.webSearch).toEqual({ maxUses: 2, maxResults: 5 });
+    expect(research.jsonSchema.name).toBe("product_research");
+    const parts = research.messages[1].content as Array<{ type: string; text?: string }>;
+    expect(parts.map((p) => p.type)).toEqual(["text"]); // no images: a photo cannot identify an exact model
+    expect(parts[0].text).toContain('"vendor": "Acme"');
+    expect(parts[0].text).toContain("at most 2 search(es)");
+
+    const [description] = calls("description");
+    const block = researchedBlock(description);
+    expect(block).toContain("Made of 100% merino wool");
+    expect(block).toContain(OFFICIAL);
+    expect(block).not.toContain("Weighs 45 g"); // its source was never returned by the search
+
+    const { job, research: record } = await stored(started.job.id);
+    expect(record).toMatchObject({
+      status: "USED",
+      matchedProduct: "Acme Blue Beanie",
+      confidence: "high",
+      facts: [
+        { fact: "Made of 100% merino wool", sourceUrl: OFFICIAL },
+        { fact: "One size, fits head circumference 54-60 cm", sourceUrl: OFFICIAL },
+      ],
+      rejected: [{ fact: "Weighs 45 g", reason: expect.stringMatching(/not among the pages/) }],
+      sources: [{ url: OFFICIAL, title: "Blue Beanie – Acme" }],
+      searches: 1,
+    });
+    // A confirmed research fact counts as supported: "merino" in the draft is not flagged.
+    nextDescription.push(result(JSON.stringify({ ...answer, descriptionHtml: "<p>Soft merino wool beanie.</p>" })));
+    const next = await startGeneration(deps, shop.id, input({ previousJobId: started.job.id }));
+    await next.run!();
+    const { job: second } = await stored(next.job.id);
+    expect((second.output!.warningsJson as string[]).some((w) => w.includes("material"))).toBe(false);
+    expect(job.status).toBe("SUCCEEDED");
+  });
+
+  it("uses nothing from an ambiguous match and warns the merchant", async () => {
+    nextResearch.push(
+      researchResult(JSON.stringify({ ...researchAnswer, identified: false, confidence: "low", facts: [], notes: "Several beanies match" })),
+    );
+    const started = await startGeneration(deps, shop.id, input());
+    await started.run!();
+    expect(researchedBlock(calls("description")[0])).toContain("null");
+    const { job, research } = await stored(started.job.id);
+    expect(job.status).toBe("SUCCEEDED");
+    expect(research).toMatchObject({ status: "UNCERTAIN", facts: [], reason: expect.stringMatching(/could not be identified online .*Several beanies match/) });
+    expect(job.output!.warningsJson).toContain(research.reason);
+  });
+
+  it("drops every fact when the model claims sources the search never returned", async () => {
+    nextResearch.push(researchResult(undefined, { citations: [], searchCount: 0 }));
+    const started = await startGeneration(deps, shop.id, input());
+    await started.run!();
+    const { research } = await stored(started.job.id);
+    expect(research.status).toBe("UNCERTAIN");
+    expect(research.facts).toEqual([]);
+    expect(research.rejected).toHaveLength(3);
+    expect(research.reason).toMatch(/no pages to confirm/);
+  });
+
+  it.each([
+    ["a provider failure", new AiProviderError("TIMEOUT", "No answer within 60000 ms", true), /failed \(TIMEOUT\)/, "FAILED"],
+    ["an unreadable answer", researchResult("not json"), /could not be read/, "UNCERTAIN"],
+  ])("still writes the description after %s", async (_label, outcome, reason, status) => {
+    nextResearch.push(outcome);
+    const started = await startGeneration(deps, shop.id, input());
+    await started.run!();
+    const { job, research } = await stored(started.job.id);
+    expect(job).toMatchObject({ status: "SUCCEEDED", draftHtml: "<p>A warm beanie, waterproof and made of 100% wool.</p>" });
+    expect(research).toMatchObject({ status, facts: [] });
+    expect(research.reason).toMatch(reason);
+    expect(job.output!.warningsJson).toContain(research.reason);
+    expect(job.output).toMatchObject({ promptTokens: status === "FAILED" ? 800 : 1100 }); // a failed call cost nothing to sum
+  });
+
+  it("skips research for a product without a vendor or model number, and when switched off", async () => {
+    shopifyQuery.mockImplementation(async (_n: string, _d: string, variables: { id: string }) => ({
+      product: { ...shopifyProduct(variables.id), vendor: null },
+    }));
+    const plain = await startGeneration(deps, shop.id, input());
+    await plain.run!();
+    expect(calls("research")).toHaveLength(0);
+    expect((await stored(plain.job.id)).research).toMatchObject({ status: "SKIPPED", reason: expect.stringMatching(/vendor .* model number/) });
+
+    shopifyQuery.mockImplementation(async (_n: string, _d: string, variables: { id: string }) => ({
+      product: { ...shopifyProduct(variables.id), vendor: null, title: "Acme WH-1000XM5 headphones" },
+    }));
+    const modelNumber = await startGeneration(deps, shop.id, input());
+    await modelNumber.run!();
+    expect(calls("research")).toHaveLength(1); // a model-like token in the title is enough
+
+    const off = { ...deps, config: { ...config, research: false } };
+    const disabled = await startGeneration(off, shop.id, input());
+    await disabled.run!();
+    expect(calls("research")).toHaveLength(1);
+    expect((await stored(disabled.job.id)).research).toMatchObject({ status: "SKIPPED", reason: expect.stringMatching(/switched off/) });
+    // Research is never part of the input hash: the same product gives the same hash either way.
+    expect(disabled.job.inputHash).toBe(modelNumber.job.inputHash);
   });
 });

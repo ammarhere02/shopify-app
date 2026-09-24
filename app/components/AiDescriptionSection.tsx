@@ -3,7 +3,8 @@
  * Called by: routes/app.products.$id.tsx, rendered for every product that still exists in Shopify.
  * Input: Product id, allowed models, the product's Shopify images, the latest job, history, versions, granted scopes,
  *        plus the page's own left-column cards (badge editor, product details) as React nodes.
- * Output: Form posts to /app/products/:id/generation and polls it while a job runs.
+ * Output: Form posts to /app/products/:id/generation and polls it while a job runs. Shows the draft,
+ *         SEO suggestions and the web research sources (facts with links) for merchant review.
  * Uses: The generation resource route only; the browser-side sanitizer for the preview.
  * Does not: Touch the database or Shopify directly, or see any secret.
  */
@@ -15,6 +16,7 @@ import type {
   GenerationLoaderData,
 } from "../routes/app.products.$id_.generation";
 import type { VersionView } from "../services/description-apply.server";
+import type { ResearchRecord } from "../services/description-output";
 import {
   aiStatusLabel,
   isGenerationFinished,
@@ -263,6 +265,96 @@ function Collapse(props: {
   );
 }
 
+/** Tone and label for the research status badge. */
+const RESEARCH_BADGE: Record<ResearchRecord["status"], { label: string; tone: "success" | "warning" | "critical" | "neutral" }> = {
+  USED: { label: "Web sources used", tone: "success" },
+  UNCERTAIN: { label: "Not confirmed", tone: "warning" },
+  FAILED: { label: "Research failed", tone: "critical" },
+  SKIPPED: { label: "Not researched", tone: "neutral" },
+};
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+};
+
+/**
+ * The Sources tab: what the web research found, with a link to every page so the merchant can
+ * check each specification before approving. Only facts whose source the search tool really
+ * returned reach the description; everything else is listed as not used, with the reason.
+ */
+function ResearchSources({ research }: { research: ResearchRecord | null }) {
+  if (!research) {
+    return (
+      <s-text color="subdued">
+        No web research was recorded for this generation. Regenerate to research the product online.
+      </s-text>
+    );
+  }
+  const badge = RESEARCH_BADGE[research.status];
+  return (
+    <s-stack gap="base">
+      <s-stack direction="inline" gap="small" alignItems="center">
+        <s-badge tone={badge.tone}>{badge.label}</s-badge>
+        {research.matchedProduct && (
+          <s-text color="subdued">Matched: {research.matchedProduct}</s-text>
+        )}
+      </s-stack>
+      <s-text>{research.reason}</s-text>
+      {research.facts.length > 0 && (
+        <s-stack gap="small-200">
+          <s-text type="strong">Specifications used in the draft</s-text>
+          <s-unordered-list>
+            {research.facts.map((fact) => (
+              <s-list-item key={`${fact.fact}|${fact.sourceUrl}`}>
+                {fact.fact}{" "}
+                <s-link href={fact.sourceUrl} target="_blank">
+                  ({hostOf(fact.sourceUrl)})
+                </s-link>
+              </s-list-item>
+            ))}
+          </s-unordered-list>
+        </s-stack>
+      )}
+      {research.rejected.length > 0 && (
+        <s-stack gap="small-200">
+          <s-text type="strong">Found but not used</s-text>
+          <s-unordered-list>
+            {research.rejected.map((item) => (
+              <s-list-item key={`${item.fact}|${item.sourceUrl}`}>
+                {item.fact} <s-text color="subdued">— {item.reason}</s-text>
+              </s-list-item>
+            ))}
+          </s-unordered-list>
+        </s-stack>
+      )}
+      {research.sources.length > 0 && (
+        <s-stack gap="small-200">
+          <s-text type="strong">Pages the search returned</s-text>
+          <s-unordered-list>
+            {research.sources.map((source) => (
+              <s-list-item key={source.url}>
+                <s-link href={source.url} target="_blank">
+                  {source.title ?? hostOf(source.url)}
+                </s-link>{" "}
+                <s-text color="subdued">{hostOf(source.url)}</s-text>
+              </s-list-item>
+            ))}
+          </s-unordered-list>
+        </s-stack>
+      )}
+      {research.searches !== null && (
+        <s-text color="subdued">
+          {research.searches} web search{research.searches === 1 ? "" : "es"} run.
+        </s-text>
+      )}
+    </s-stack>
+  );
+}
+
 const Panel = (props: { id: string; children: ReactNode }) => (
   <div role="tabpanel" id={props.id} tabIndex={0} className="eh-fade">
     {props.children}
@@ -293,7 +385,7 @@ export function AiDescriptionSection(props: Props) {
   const [model, setModel] = useState(models[0] ?? "");
   const [draft, setDraft] = useState(props.latest?.draftHtml ?? "");
   // View state only: never touched by a poll or an action answer, so it stays where the merchant put it.
-  const [tab, setTab] = useState<"description" | "html" | "seo">("description");
+  const [tab, setTab] = useState<"description" | "html" | "seo" | "sources">("description");
   const [historyTab, setHistoryTab] = useState<"generations" | "versions">(
     "generations",
   );
@@ -728,6 +820,7 @@ export function AiDescriptionSection(props: Props) {
                     { id: "description", label: "Description" },
                     { id: "html", label: isDraft ? "Edit HTML" : "HTML" },
                     { id: "seo", label: "SEO suggestions" },
+                    { id: "sources", label: "Sources" },
                   ]}
                 />
               )}
@@ -924,6 +1017,12 @@ export function AiDescriptionSection(props: Props) {
                         </s-stack>
                       </Panel>
                     )}
+
+                  {job?.status === "SUCCEEDED" && tab === "sources" && (
+                    <Panel id={`${panelBase}-sources-panel`}>
+                      <ResearchSources research={job.research} />
+                    </Panel>
+                  )}
 
                   {job && (
                     <s-stack gap="small-200">

@@ -157,6 +157,7 @@ beforeEach(async () => {
   adminMock.mockImplementation(async () => ({ admin: { graphql } }));
   process.env.OPENROUTER_API_KEY = "sk-test-key";
   process.env.OPENROUTER_MODELS = "vendor/vision:free";
+  process.env.AI_RESEARCH = "off"; // one model call per job here; research has its own tests
   shopA = await makeShop();
   shopB = await makeShop();
   keyA = (await createApiKey(shopA.id, "A")).plaintext;
@@ -203,6 +204,38 @@ describe("POST /api/v1/products/{id}/description-generations", () => {
     expect(second.status).toBe(200);
     expect((await second.json()).data.id).toBe(id);
     expect(generateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the research record with source URLs, and older generations without one read as null", async () => {
+    process.env.AI_RESEARCH = "on";
+    const official = "https://www.acme.example/blue-beanie";
+    generateMock.mockImplementation(async (request: { jsonSchema: { name: string } }) =>
+      request.jsonSchema.name === "product_research"
+        ? {
+            content: JSON.stringify({ identified: true, matchedProduct: "Acme Blue Beanie", confidence: "high", facts: [{ fact: "100% merino wool", sourceUrl: official }], notes: "" }),
+            generationId: "gen-r", model: "vendor/vision:free", promptTokens: 100, completionTokens: 50, cost: 0.01, latencyMs: 400,
+            citations: [{ url: official, title: "Blue Beanie" }], searchCount: 1,
+          }
+        : { content: JSON.stringify(answer), generationId: "gen-9", model: "vendor/vision:free", promptTokens: 700, completionTokens: 150, cost: 0, latencyMs: 900, citations: [], searchCount: null },
+    );
+    const id = (await (await create(productA, { mediaIds: [IMG1] })).json()).data.id;
+    const data = await waitUntilFinished(id);
+    expect(data.research).toMatchObject({
+      status: "USED",
+      matchedProduct: "Acme Blue Beanie",
+      facts: [{ fact: "100% merino wool", sourceUrl: official }],
+      sources: [{ url: official, title: "Blue Beanie" }],
+      searches: 1,
+    });
+    expect(data.generated).not.toHaveProperty("research");
+    expect(data.usage).toMatchObject({ promptTokens: 800, completionTokens: 200, estimatedCostUsd: 0.01 });
+    expect(generateMock).toHaveBeenCalledTimes(2);
+
+    // A record written before research existed has no `research` key in validatedJson.
+    await db.aiGenerationOutput.update({ where: { jobId: id }, data: { validatedJson: answer } });
+    const older = await (await getJob(id)).json();
+    expect(older.data.research).toBeNull();
+    expect(older.data.generated).toMatchObject({ seoTitle: answer.seoTitle });
   });
 
   it("requires an API key and gives the standard 401 envelope", async () => {

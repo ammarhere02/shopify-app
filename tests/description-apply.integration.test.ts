@@ -183,6 +183,7 @@ beforeEach(async () => {
   adminMock.mockImplementation(async () => ({ admin: { graphql } }));
   process.env.OPENROUTER_API_KEY = "sk-test-key";
   process.env.OPENROUTER_MODELS = "vendor/vision:free";
+  process.env.AI_RESEARCH = "off"; // one model call per job here; research has its own tests
   shopA = await makeShop();
   shopB = await makeShop();
   keyA = (await createApiKey(shopA.id, "a")).plaintext;

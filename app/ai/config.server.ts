@@ -1,7 +1,7 @@
 /**
  * Purpose: Reads and validates the OpenRouter settings and limits for the AI feature.
  * Called by: createGenerationDeps, the worker, and pages that need the allowed model names.
- * Input: Environment variables (key, model allowlist, timeouts, limits).
+ * Input: Environment variables (key, model allowlist, timeouts, limits, research switches).
  * Output: A typed AiConfig, or AiConfigError naming the missing or invalid variable.
  * Uses: process.env only.
  * Does not: Make network calls or expose the key value anywhere, including error messages.
@@ -33,6 +33,12 @@ export type AiConfig = {
   maxImages: number;
   dailyLimitPerShop: number;
   maxConcurrentPerShop: number;
+  /** Product research (web search before the description). Off = one call per generation, as before. */
+  research: boolean;
+  /** Searches one research call may run; each is billed on top of the tokens. */
+  researchMaxSearches: number;
+  /** Results per search. */
+  researchMaxResults: number;
 };
 
 type Env = Record<string, string | undefined>;
@@ -61,6 +67,8 @@ export function loadAiConfig(env: Env = process.env): AiConfig {
   if (dataCollection !== "deny" && dataCollection !== "allow") {
     throw new AiConfigError('OPENROUTER_DATA_COLLECTION must be "deny" or "allow"');
   }
+  const research = env.AI_RESEARCH?.trim().toLowerCase() || "on";
+  if (research !== "on" && research !== "off") throw new AiConfigError('AI_RESEARCH must be "on" or "off"');
 
   return {
     apiKey,
@@ -74,6 +82,9 @@ export function loadAiConfig(env: Env = process.env): AiConfig {
     maxImages: intInRange(env, "AI_MAX_IMAGES", 4, 1, 4),
     dailyLimitPerShop: intInRange(env, "AI_DAILY_LIMIT_PER_SHOP", 50, 1, 10_000),
     maxConcurrentPerShop: intInRange(env, "AI_MAX_CONCURRENT_PER_SHOP", 1, 1, 10),
+    research: research === "on",
+    researchMaxSearches: intInRange(env, "AI_RESEARCH_MAX_SEARCHES", 2, 1, 5),
+    researchMaxResults: intInRange(env, "AI_RESEARCH_MAX_RESULTS", 5, 1, 10),
   };
 }
 

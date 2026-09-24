@@ -1,4 +1,4 @@
-import type { DescriptionOutput } from "./description-output";
+import type { DescriptionOutput, ResearchRecord } from "./description-output";
 
 type JobRow = {
   id: number;
@@ -31,9 +31,18 @@ type JobRow = {
 /**
  * The one public shape of a generation, used by the admin page and by /api/v1.
  * Left out on purpose: the raw model answer, the product snapshot and local product ids.
+ * `research` is the web research record (facts with source URLs, or why none were used);
+ * generations made before research existed have none and report `null`.
  */
 export function serializeGeneration(job: JobRow) {
-  const generated = (job.output?.validatedJson ?? null) as DescriptionOutput | null;
+  const stored = (job.output?.validatedJson ?? null) as (DescriptionOutput & { research?: ResearchRecord }) | null;
+  let generated: DescriptionOutput | null = null;
+  let research: ResearchRecord | null = null;
+  if (stored) {
+    const { research: record, ...rest } = stored;
+    generated = rest;
+    research = record ?? null;
+  }
   return {
     id: job.id,
     status: job.status,
@@ -53,6 +62,7 @@ export function serializeGeneration(job: JobRow) {
     // The merchant's working copy. `generated` stays as the model wrote it (after sanitizing).
     draftHtml: job.draftHtml,
     generated,
+    research,
     warnings: (job.output?.warningsJson ?? []) as string[],
     usage: job.output
       ? {
