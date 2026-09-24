@@ -278,7 +278,7 @@ export const RESEARCH_JSON_SCHEMA = {
     properties: {
       identified: {
         type: "boolean",
-        description: "true only when the search results name this exact product or model, not merely a similar one.",
+        description: "true when a result names this product's brand, model and generation (variants of the same model count), or its SKU. Must agree with notes.",
       },
       matchedProduct: { type: "string", description: "Full product or model name as the sources give it; empty when not identified." },
       confidence: { type: "string", enum: ["high", "medium", "low"], description: "How sure you are that the sources describe this exact product." },
@@ -351,10 +351,10 @@ function notIdentifiedReason(input: {
 }): string {
   const { identified, matchedProduct, confidence, notes, citations } = input;
   const hosts = [...new Set(citations.map((c) => hostOf(c.url)).filter((h): h is string => !!h))].slice(0, 3);
-  const lead =
-    identified && matchedProduct
-      ? `Closest match "${matchedProduct}" was found, but with ${confidence ?? "unknown"} confidence it is not confirmed as this exact product.`
-      : "The exact product was not confirmed online.";
+  const name = matchedProduct ? ` "${matchedProduct}"` : "";
+  const lead = identified
+    ? `The research matched${name || " a product"} but reported ${confidence ?? "no"} confidence, so it is not confirmed as this exact product.`
+    : `The research model did not confirm this exact product${name ? ` (closest:${name})` : ""}.`;
   const detail = notes
     ? ` ${/[.!?]$/.test(notes) ? notes : `${notes}.`}`
     : hosts.length
