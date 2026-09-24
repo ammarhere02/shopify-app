@@ -350,6 +350,7 @@ async function researchProduct(deps: RunDeps, prepared: Prepared, log: Record<st
         product: prepared.product,
         merchantContext: prepared.merchantContext,
         maxSearches: deps.config.researchMaxSearches,
+        images: prepared.images,
       }),
       jsonSchema: RESEARCH_JSON_SCHEMA,
       maxOutputTokens: RESEARCH_MAX_OUTPUT_TOKENS,
