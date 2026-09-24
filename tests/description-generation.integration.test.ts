@@ -187,7 +187,7 @@ describe("a successful generation", () => {
   it("returns a QUEUED job first, then the run stores a sanitized draft, warnings and usage", async () => {
     const started = await startGeneration(deps, shop.id, input());
     expect(started.created).toBe(true);
-    expect(started.job).toMatchObject({ status: "QUEUED", model: "vendor/vision:free", provider: "openrouter", promptVersion: "v4" });
+    expect(started.job).toMatchObject({ status: "QUEUED", model: "vendor/vision:free", provider: "openrouter", promptVersion: "v5" });
     expect(started.job.inputHash).toMatch(/^[0-9a-f]{64}$/);
     expect(generate).not.toHaveBeenCalled();
 
@@ -452,7 +452,7 @@ describe("web research before the description", () => {
     return text.slice(text.indexOf("<<<RESEARCHED_FACTS"), text.indexOf("RESEARCHED_FACTS>>>"));
   };
 
-  it("searches with the product identifiers only, then passes confirmed facts and sources to the description", async () => {
+  it("searches with the product identifiers and images, then passes confirmed facts and sources to the description", async () => {
     const started = await startGeneration(deps, shop.id, input());
     await started.run!();
 
@@ -460,7 +460,7 @@ describe("web research before the description", () => {
     expect(research.webSearch).toEqual({ maxUses: 2, maxResults: 5 });
     expect(research.jsonSchema.name).toBe("product_research");
     const parts = research.messages[1].content as Array<{ type: string; text?: string }>;
-    expect(parts.map((p) => p.type)).toEqual(["text"]); // no images: a photo cannot identify an exact model
+    expect(parts.map((p) => p.type)).toEqual(["text", "image_url", "image_url"]); // images let the model read the brand from a logo
     expect(parts[0].text).toContain('"vendor": "Acme"');
     expect(parts[0].text).toContain("at most 2 search(es)");
 
@@ -501,7 +501,7 @@ describe("web research before the description", () => {
     expect(researchedBlock(calls("description")[0])).toContain("null");
     const { job, research } = await stored(started.job.id);
     expect(job.status).toBe("SUCCEEDED");
-    expect(research).toMatchObject({ status: "UNCERTAIN", facts: [], reason: expect.stringMatching(/could not be identified online .*Several beanies match/) });
+    expect(research).toMatchObject({ status: "UNCERTAIN", facts: [], reason: expect.stringMatching(/not confirmed online\. .*Several beanies match/) });
     expect(job.output!.warningsJson).toContain(research.reason);
   });
 

@@ -201,7 +201,10 @@ export async function startGeneration(
   const existing = await findJobByIdempotencyKey(shopId, input.idempotencyKey);
   if (existing) return { job: existing, created: false };
 
-  const local = await db.product.findFirst({ where: { id: input.productId, shopId, deletedAt: null } });
+  const local = await db.product.findFirst({
+    where: { id: input.productId, shopId, deletedAt: null },
+    include: { variants: { select: { sku: true } } },
+  });
   if (!local) throw new GenerationError("NOT_FOUND", "Product not found");
 
   const remote = await fetchProductForDescription(deps.shopify, local.shopifyProductGid);
@@ -218,11 +221,13 @@ export async function startGeneration(
 
   const merchantContext = input.merchantContext?.trim() || null;
   const descriptionHtml = remote.descriptionHtml ?? "";
+  const skus = [...new Set(local.variants.map((v) => v.sku?.trim()).filter((sku): sku is string => !!sku))];
   const product: PromptProduct = {
     title: remote.title,
     vendor: remote.vendor,
     productType: remote.productType,
     tags: remote.tags,
+    skus,
     currentDescriptionText: htmlToText(descriptionHtml),
   };
   // What the model was given, plus what Apply needs later to detect a stale product.
@@ -232,6 +237,7 @@ export async function startGeneration(
     vendor: remote.vendor,
     productType: remote.productType,
     tags: remote.tags,
+    skus,
     status: remote.status,
     shopifyUpdatedAt: remote.updatedAt,
     descriptionHtml,
@@ -295,6 +301,8 @@ type StoredSnapshot = {
   vendor: string | null;
   productType: string | null;
   tags: string[];
+  /** Absent on jobs created before SKUs were sent to the model. */
+  skus?: string[];
   descriptionHtml: string;
   images: ProductImageChoice[];
 };
@@ -314,6 +322,7 @@ export function prepareFromJob(job: AiGenerationJob & { input: { productSnapshot
       vendor: snapshot.vendor,
       productType: snapshot.productType,
       tags: snapshot.tags ?? [],
+      skus: snapshot.skus ?? [],
       currentDescriptionText: htmlToText(snapshot.descriptionHtml ?? ""),
     },
     images: snapshot.images.map(({ url, alt }) => ({ url, alt })),

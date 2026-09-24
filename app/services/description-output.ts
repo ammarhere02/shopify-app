@@ -295,7 +295,11 @@ export const RESEARCH_JSON_SCHEMA = {
           },
         },
       },
-      notes: { type: "string", description: "One short sentence on what was found or why identification failed." },
+      notes: {
+        type: "string",
+        description:
+          "Always required, shown to the store owner. Not identified: what the search found (brand, closest products or codes) and what identifier is missing. Identified: which result matched and how.",
+      },
     },
   } as Record<string, unknown>,
 };
@@ -330,6 +334,33 @@ export const failedResearch = (kind: string): ResearchRecord => ({
 });
 
 /**
+ * The merchant-facing sentence for a product the research could not confirm. It says why (not
+ * found, or found with low confidence), what the model found, and what would let it confirm, so the
+ * merchant is never left with a bare "not confirmed". Falls back to the searched sites when the
+ * model gave no notes.
+ */
+function notIdentifiedReason(input: {
+  identified: boolean;
+  matchedProduct: string | null;
+  confidence: "high" | "medium" | "low" | null;
+  notes: string;
+  citations: Citation[];
+}): string {
+  const { identified, matchedProduct, confidence, notes, citations } = input;
+  const hosts = [...new Set(citations.map((c) => hostOf(c.url)).filter((h): h is string => !!h))].slice(0, 3);
+  const lead =
+    identified && matchedProduct
+      ? `Closest match "${matchedProduct}" was found, but with ${confidence ?? "unknown"} confidence it is not confirmed as this exact product.`
+      : "The exact product was not confirmed online.";
+  const detail = notes
+    ? ` ${/[.!?]$/.test(notes) ? notes : `${notes}.`}`
+    : hosts.length
+      ? ` The search returned pages from ${hosts.join(", ")}, but none named this exact item.`
+      : " The search returned no pages.";
+  return `${lead}${detail} Researched specifications were not used; adding the brand's SKU or style code to the product helps confirm it.`;
+}
+
+/**
  * Turn the research answer into a record the description call and the merchant can rely on.
  * Never throws and never fails the generation: anything doubtful ends as UNCERTAIN with the reason.
  * A fact is kept only when ALL of these hold:
@@ -362,10 +393,11 @@ export function validateResearchOutput(content: string, citations: Citation[], s
   const notes = plainLine(obj.notes, RESEARCH_LIMITS.notes);
 
   if (obj.identified !== true || confidence === null || confidence === "low") {
-    return uncertain(
-      `The exact product could not be identified online${notes ? ` (${notes})` : ""}; researched specifications were not used.`,
-      { matchedProduct, confidence, rejected: [] },
-    );
+    return uncertain(notIdentifiedReason({ identified: obj.identified === true, matchedProduct, confidence, notes, citations }), {
+      matchedProduct,
+      confidence,
+      rejected: [],
+    });
   }
 
   const citedHosts = new Set(citations.map((c) => hostOf(c.url)).filter((h): h is string => !!h));
